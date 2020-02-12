@@ -2,6 +2,7 @@ local lua_util = require "lua_util"
 local http = require "rspamd_http"
 local rspamd_cryptobox_hash = require "rspamd_cryptobox_hash"
 local rspamd_logger = require "rspamd_logger"
+local rspamd_util = require "rspamd_util"
 local common = require "lua_scanners/common"
 
 local N = 'yomi'
@@ -44,7 +45,30 @@ local function yomi_config(opts)
   return default_conf
 end
 
+local function yomi_upload(task, content, rule)
+     rspamd_logger.infox(task, '%s: uploading to sandbox: %s', rule.log_prefix, content)
+     local request_data = {
+      task = task,
+      url = string.format('%s/submit', rule.url),
+      timeout = rule.timeout,
+      method = 'POST',
+      mime_type='application/json',
+      body = string.format('{"data": "%s"}', rspamd_util.encode_base64(content))
+    }
+
+
+    local function upd_http_callback(http_err, code, body, headers)
+        rspamd_logger.infox(task, '%s: upload returned %s: %s', rule.log_prefix, code, body)
+        task:insert_result(rule.symbol_fail, 0, 'Uploaded')
+        return
+    end
+
+    request_data.callback = upd_http_callback
+    http.request(request_data)
+end
+ 
 local function yomi_check(task, content, digest, rule)
+  rspamd_logger.infox(task, '%s: executing Yomi virus check', rule.log_prefix)
   local function yomi_check_uncached()
     local function make_url(hash)
       return string.format('%s/hash/%s',
@@ -56,7 +80,7 @@ local function yomi_check(task, content, digest, rule)
     hash = hash:hex()
 
     local url = make_url(hash)
-    lua_util.debugm(N, task, "send request %s", url)
+    rspamd_logger.infox(task, '%s: sending request %s', rule.log_prefix, url)
     local request_data = {
       task = task,
       url = url,
@@ -72,14 +96,12 @@ local function yomi_check(task, content, digest, rule)
         -- Parse the response
         if code ~= 200 then
           if code == 404 then
-            cached = 'OK'
             if rule['log_clean'] then
-              rspamd_logger.infox(task, '%s: hash %s clean (not found)',
-                  rule.log_prefix, hash)
-            else
-              lua_util.debugm(rule.name, task, '%s: hash %s clean (not found)',
+              rspamd_logger.infox(task, '%s: hash %s not found',
                   rule.log_prefix, hash)
             end
+            yomi_upload(task, content, rule)
+
           elseif code == 204 then
             -- Request rate limit exceeded
             rspamd_logger.infox(task, 'yomi request rate limit exceeded')
@@ -95,51 +117,33 @@ local function yomi_check(task, content, digest, rule)
           local parser = ucl.parser()
           local res,json_err = parser:parse_string(body)
 
-          lua_util.debugm(rule.name, task, '%s: got reply data: "%s"',
-              rule.log_prefix, body)
 
           if res then
             local obj = parser:get_object()
-            if not obj.score or type(obj.score) ~= 'number' then
-              if obj.response_code then
-                if obj.response_code == 0 then
-                  cached = 'OK'
-                  if rule['log_clean'] then
-                    rspamd_logger.infox(task, '%s: hash %s clean (not found)',
-                        rule.log_prefix, hash)
-                  else
-                    lua_util.debugm(rule.name, task, '%s: hash %s clean (not found)',
-                        rule.log_prefix, hash)
-                  end
+            rspamd_logger.infox(task, '%s: Yomi response: %s', rule.log_prefix, obj)
+            rspamd_logger.infox(task, '%s: Yomi score: %s, %s', rule.log_prefix, obj['score'],  type(obj['score']))
+            if not obj['score'] or type(obj['score']) ~= 'number' then
+                rspamd_logger.errx(task, 'Invalid JSON object (no score found): %s', body)
+            else
+                -- A file is a virus if the score is greater than 0.7
+                if obj['score'] >= 0.7 then
+                    local sopt = string.format("%s:%s", obj['malware'],obj['score'])
+                    common.yield_result(task, rule, sopt, obj['score'])
                 else
-                  rspamd_logger.errx(task, 'invalid JSON reply: %s, body: %s, headers: %s',
-                      'bad response code: ' .. tostring(obj.response_code), body, headers)
-                  task:insert_result(rule.symbol_fail, 0, 'Bad JSON reply: no `score` elements')
-                  return
+                    rspamd_logger.infox(task, '%s: file is clean', rule.log_prefix, hash)
                 end
-              else
-                rspamd_logger.errx(task, 'invalid JSON reply: %s, body: %s, headers: %s',
-                    'no response_code', body, headers)
-                task:insert_result(rule.symbol_fail, 0, 'Bad JSON reply: no `score` elementa')
-                return
-              end
-            local sopt = string.format("%s : score : %s",
-                    hash, obj.score, dyn_score)
-                common.yield_result(task, rule, sopt, dyn_score)
-                cached = sopt
-              end
+            end
+
+
+
           else
             -- not res
-            rspamd_logger.errx(task, 'invalid JSON reply: %s, body: %s, headers: %s',
-                json_err, body, headers)
-            task:insert_result(rule.symbol_fail, 1.0, 'Bad JSON reply: ' .. json_err)
+            rspamd_logger.errx(task, 'Yomi invalid response')
+            task:insert_result(rule.symbol_fail, 1.0, 'Bad Yomi reply: ' .. json_err)
             return
           end
         end
 
-        if cached then
-          common.save_cache(task, digest, rule, cached, dyn_score)
-        end
       end
     end
 
