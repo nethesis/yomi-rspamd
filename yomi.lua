@@ -60,7 +60,7 @@ local function yomi_upload(task, content, rule)
 
     local function yupd_http_callback(http_err, code, body, headers)
         rspamd_logger.infox(task, '%s: upload returned %s', rule.log_prefix, code)
-        task:insert_result('YOMI_IN', 0, 'Uploaded')
+        task:insert_result('YOMI_WAIT', 0, 'Uploaded')
         return
     end
 
@@ -118,8 +118,7 @@ local function yomi_check(task, content, digest, rule)
           if res then
             local obj = parser:get_object()
             rspamd_logger.infox(task, '%s: Yomi response score: %s', rule.log_prefix, obj['score'])
-            if not obj['score'] or type(obj['score']) ~= 'number' then
-                rspamd_logger.info(task, 'Sandbox analysis in progress')
+            if not obj['score'] or type(obj['score']) ~= 'number' or  obj['score'] == '' then
                 task:insert_result('CLAM_VIRUS_FAIL', 1, 'Sandbox in progress')
                 task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
             else
