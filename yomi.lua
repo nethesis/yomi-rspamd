@@ -122,8 +122,8 @@ local function yomi_check(task, content, digest, rule)
                 task:insert_result('CLAM_VIRUS_FAIL', 1, 'Sandbox in progress')
                 task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
             else
-                -- A file is a virus if the score is 1
-                if obj['score'] == 1 then
+                -- A file is a virus if the score greater than 0.7
+                if obj['score'] > 0.7 then
                     local sopt = string.format("%s:%s", obj['malware'],obj['score'])
                      -- common.yield_result(task, rule, sopt, obj['score'])
                     task:insert_result('YOMI_VIRUS', 1, 'Virus found from Yomi')
