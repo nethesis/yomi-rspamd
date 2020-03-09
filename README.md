@@ -55,7 +55,8 @@ systemctl restart rspamd
 The rspamd plugin can insert the following symbols inside the mail header:
 
 - `YOMI_FAIL`: if the proxy or upstream service has failed
-- `YOMI_VIRUS`: if the given  is a virus (score is greater than 0.7)
+- `YOMI_VIRUS`: if the given file is a virus (score is greater than 0.7 by default)
+- `YOMI_SUSPICIOUS`: if the given file is suspicious (score is between 0.4 and 0.7 by default)
 - `YOMI_CLEAN`: if the given file is not a virus
 - `YOMI_WAIT`: if the file is being processed inside the Sandbox, also add the `CLAM_VIRUS_FAIL` symbol to handle the soft reject
 
