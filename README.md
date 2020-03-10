@@ -59,14 +59,3 @@ The rspamd plugin can insert the following symbols inside the mail header:
 - `YOMI_CLEAN`: if the given file is not a virus
 - `YOMI_WAIT`: if the file is being processed inside the Sandbox, also add the `CLAM_VIRUS_FAIL` symbol to handle the soft reject
 
-# Test 
-
-Send an email and check if the attachment its a malware.
-
-![alt text](img/test.png)
-
-Tested with EICAR-TEST
-
-
-
-
