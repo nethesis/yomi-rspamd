@@ -27,27 +27,20 @@ require_scanner('yomi')
 
 # CONFIGURE
 
-YOMI RSPAMD has basic configuration setup.
 
-Fist, edit the antivirus.conf located on :
+Enable yomi scanner  inside rspamd `/etc/rspamd/local.d/antivirus.conf`:
 
 ```
-mkdir -p /etc/e-smith/templates-custom/etc/rspamd/local.d/antivirus.conf/
-cat << EOF > /etc/e-smith/templates-custom/etc/rspamd/local.d/antivirus.conf/21yomi
-yomi \{
-  action = "reject";
-  message = '\$SCANNER: virus found: "\$VIRUS"';
-  scan_mime_parts = true;
-  max_size = 20000000;
-  symbol = "YOMI_VIRUS";
-  type = "yomi";
-  log_clean = true;
-  url = "https://yomi.nethserver.net/yomi"
-\}
-EOF
+enabled = true
 
-expand-template /etc/rspamd/local.d/antivirus.conf
-systemctl restart rspamd
+yomi {
+  type = "yomi";
+  url = "https://sb.nethesis.it";
+  virus_score = 0.8;
+  suspicious_score = 0.4;
+  system_id = "my_system_id";
+  secret = "my_system_secret";
+}
 ```
 
 ## Symbols
