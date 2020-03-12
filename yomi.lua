@@ -13,7 +13,7 @@ local function yomi_config(opts)
 
   local default_conf = {
     name = N,
-    url = "http://127.0.0.1:5000",
+    url = "http://yomi.nethserver.net:8080/api",
     timeout = 5.0,
     log_clean = true,
     retransmits = 3,
@@ -74,6 +74,8 @@ local function handle_yomi_result(result, task, rule)
     task:insert_result('YOMI_VIRUS', 1, 'Virus found by Yomi: ' .. malware_description)
   elseif score > rule.suspicious_score then
     task:insert_result('YOMI_SUSPICIOUS', 1, 'Suspicious file found by Yomi: ' .. malware_description)
+  elseif score < 0 then
+    task:insert_result('YOMI_UNKNOWN', 1, "Yomi wasn't able to compute a score: " .. malware_description)
   else
     task:insert_result('YOMI_CLEAN', 1, 'File is clean')
   end
