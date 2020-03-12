@@ -106,6 +106,7 @@ local function yomi_upload(task, content, hash, auth, rule)
 
       if code == 202 then
         task:insert_result('YOMI_WAIT', 1, 'File uploaded')
+        task:insert_result('CLAM_VIRUS_FAIL', 1, 'File uploaded')
       elseif code == 401 or code == 403 then
         task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
       elseif code == 200 then
@@ -203,6 +204,7 @@ local function yomi_check(task, content, digest, rule)
         task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
       elseif code == 202 then
         task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
+        task:insert_result('CLAM_VIRUS_FAIL', 1, 'Sandbox in progress')
       elseif code == 200 then
         local parser = ucl.parser()
         local res,json_err = parser:parse_string(body)
