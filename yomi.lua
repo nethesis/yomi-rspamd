@@ -5,7 +5,7 @@ local http = require "rspamd_http"
 local rspamd_cryptobox_hash = require "rspamd_cryptobox_hash"
 local rspamd_logger = require "rspamd_logger"
 local rspamd_util = require "rspamd_util"
--- local common = require "lua_scanners/common"
+local ucl = require "ucl"
 
 local N = 'yomi'
 
@@ -16,14 +16,17 @@ local function yomi_config(opts)
     url = "http://127.0.0.1:5000",
     timeout = 5.0,
     log_clean = true,
-    retransmits = 1,
+    retransmits = 3,
+    retransmit_delay = 3,
     message = '${SCANNER}: spam message found: "${VIRUS}"',
     detection_category = "virus",
     default_score = 1,
     action = false,
     scan_mime_parts = true,
     scan_text_mime = false,
-    scan_image_mime = false
+    scan_image_mime = false,
+    virus_score = 0.7,
+    suspicious_score = 0.4
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -41,113 +44,166 @@ local function yomi_config(opts)
     end
   end
 
-
   lua_util.add_debug_alias('external_services', default_conf.name)
   return default_conf
 end
 
-local function yomi_upload(task, content, rule)
-     rspamd_logger.infox(task, '%s: uploading to sandbox', rule.log_prefix)
-     local request_data = {
-      task = task,
-      url = string.format('%s/submit', rule.url),
-      timeout = rule.timeout,
-      method = 'POST',
-      mime_type='application/json',
-      body = string.format('{"data": "%s"}', rspamd_util.encode_base64(content))
-    }
-
-
-    local function yupd_http_callback(http_err, code, body, headers)
-        rspamd_logger.infox(task, '%s: upload returned %s', rule.log_prefix, code)
-        task:insert_result('YOMI_WAIT', 0, 'Uploaded')
-        return
-    end
-
-    request_data.callback = yupd_http_callback
-    http.request(request_data)
+local function sleep(n)
+  os.execute("sleep " .. tonumber(n))
 end
- 
-local function yomi_check(task, content, digest, rule)
-  rspamd_logger.infox(task, '%s: executing Yomi virus check', rule.log_prefix)
 
-    local hash = rspamd_cryptobox_hash.create_specific('sha256')
-    hash:update(content)
-    hash = hash:hex()
+local function should_retransmit()
+  if rule.retransmits > 0 then
+    rule.retransmits = rule.retransmits -1
+    sleep(rule.retransmit_delay)
+    return true
+  else
+    task:insert_result('YOMI_FAIL', 1, 'Maximum retransmits exceed')
+  end
+  
+  return false
+end
 
-    local url = string.format('%s/hash/%s', rule.url, hash)
-    rspamd_logger.infox(task, '%s: sending request %s', rule.log_prefix, url)
-    local request_data = {
-      task = task,
-      url = url,
-      timeout = rule.timeout,
-    }
+local function handle_yomi_result(result, task, rule)
+  local score = result['score']
+  local malware_description = result['description']
+  rspamd_logger.infox(task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
+
+  -- A file is a virus if the score is greater than virus_score
+  if score > rule.virus_score then
+    task:insert_result('YOMI_VIRUS', 1, 'Virus found by Yomi: ' .. malware_description)
+  elseif score > rule.suspicious_score then
+    task:insert_result('YOMI_SUSPICIOUS', 1, 'Suspicious file found by Yomi: ' .. malware_description)
+  else
+    task:insert_result('YOMI_CLEAN', 1, 'File is clean')
+  end
+end
+
+local function yomi_upload(task, content, hash, auth, rule)
+  rspamd_logger.infox(task, '%s: uploading to sandbox', rule.log_prefix)
+
+  local request_data = {
+    task = task,
+    url = string.format('%s/submit', rule.url),
+    timeout = rule.timeout,
+    method = 'POST',
+    mime_type='application/json',
+    headers = {
+      ['Authorization'] = auth
+    },
+    body = string.format('{"file": "%s", "hash": "%s"}', rspamd_util.encode_base64(content), hash)
+  }
+
+  local function upload_http_callback(http_err, code, body, headers)
+    if http_err then
+      rspamd_logger.errx(task, 'HTTP error: %s, body: %s, headers: %s', http_err, body, headers)
       
+      if should_retransmit() then
+        upload_http_callback(http_err, code, body, headers)
+      end
+    else
+      rspamd_logger.infox(task, '%s: upload returned %s', rule.log_prefix, code)
 
-    local function yhash_http_callback(http_err, code, body, headers)
-      if http_err then
-        rspamd_logger.errx(task, 'HTTP error: %s, body: %s, headers: %s', http_err, body, headers)
-      else
-        -- Parse the response
-        if code ~= 200 then
-          if code == 404 then
-            if rule['log_clean'] then
-              rspamd_logger.infox(task, '%s: hash %s not found',
-                  rule.log_prefix, hash)
-            end
-            yomi_upload(task, content, rule)
-            task:insert_result('CLAM_VIRUS_FAIL', 1, 'Unknown file. uploading sample')
+      if code == 202 then
+        task:insert_result('YOMI_WAIT', 1, 'File uploaded')
+      elseif code == 401 or code == 403 then
+        task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
+      elseif code == 200 then
+        local parser = ucl.parser()
+        local res,json_err = parser:parse_string(body)
 
-          elseif code == 429 then
-            -- Request rate limit exceeded
-            rspamd_logger.infox(task, 'yomi request rate limit exceeded')
-            task:insert_result('CLAM_VIRUS_FAIL', 1, 'Rate limit exceeded')
-            task:insert_result('YOMI_WAIT', 1, 'Rate limit exceeded')
-            return
-          else
-            rspamd_logger.errx(task, 'invalid HTTP code: %s, body: %s, headers: %s', code, body, headers)
-            task:insert_result('YOMI_FAIL', 1, 'Bad HTTP code: ' .. code)
-            return
-          end
+        if res then
+          local obj = parser:get_object()
+          handle_yomi_result(obj, task, rule)
         else
-          local ucl = require "ucl"
-          local parser = ucl.parser()
-          local res,json_err = parser:parse_string(body)
-
-
-          if res then
-            local obj = parser:get_object()
-            rspamd_logger.infox(task, '%s: Yomi response score: %s', rule.log_prefix, obj['score'])
-            if not obj['score'] or type(obj['score']) ~= 'number' or  obj['score'] == '' then
-                task:insert_result('CLAM_VIRUS_FAIL', 1, 'Sandbox in progress')
-                task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
-            else
-                -- A file is a virus if the score greater than 0.7
-                if obj['score'] > 0.7 then
-                    local sopt = string.format("%s:%s", obj['malware'],obj['score'])
-                     -- common.yield_result(task, rule, sopt, obj['score'])
-                    task:insert_result('YOMI_VIRUS', 1, 'Virus found from Yomi')
-                else
-                    rspamd_logger.infox(task, '%s: file is clean', rule.log_prefix, hash)
-                    task:insert_result('YOMI_CLEAN', 1, 'File is clean')
-                end
-            end
-
-          else
-            -- not res
-            rspamd_logger.errx(task, 'Yomi invalid response')
-            task:insert_result('YOMI_FAIL', 1.0, 'Bad Yomi reply: ' .. json_err)
-            return
+          -- not res
+          rspamd_logger.errx(task, 'Yomi invalid response')
+          
+          if should_retransmit() then
+            upload_http_callback(http_err, code, body, headers)
           end
         end
-
+      else
+        rspamd_logger.errx(task, 'invalid HTTP code: %s, body: %s, headers: %s', code, body, headers)
+        
+        if should_retransmit() then
+          upload_http_callback(http_err, code, body, headers)
+        end
       end
-
+    end
   end
 
-  request_data.callback = yhash_http_callback
+  request_data.callback = upload_http_callback
   http.request(request_data)
+end
 
+local function yomi_check(task, content, digest, rule)
+  rspamd_logger.infox(task, '%s: executing Yomi virus check', rule.log_prefix)
+  local system_id = rule.system_id
+  local secret = rule.secret
+  local auth = string.format("Basic %s", rspamd_util.encode_base64(system_id .. ":" .. secret))
+
+  local hash = rspamd_cryptobox_hash.create_specific('sha256')
+  hash:update(content)
+  hash = hash:hex()
+
+  local url = string.format('%s/hash/%s', rule.url, hash)
+  rspamd_logger.infox(task, '%s: sending request %s', rule.log_prefix, url)
+  local request_data = {
+    task = task,
+    url = url,
+    timeout = rule.timeout,
+    headers = {
+      ['Authorization'] = auth
+    },
+  }
+
+  local function hash_http_callback(http_err, code, body, headers)
+    if http_err then
+      rspamd_logger.errx(task, 'HTTP error: %s, body: %s, headers: %s', http_err, body, headers)
+      
+      if should_retransmit() then
+        hash_http_callback(http_err, code, body, headers)
+      end
+    else
+      rspamd_logger.infox(task, '%s: hash returned %s', rule.log_prefix, code)
+
+      if code == 404 then
+        if rule['log_clean'] then
+          rspamd_logger.infox(task, '%s: hash %s not found', rule.log_prefix, hash)
+        end
+        yomi_upload(task, content, hash, auth, rule)
+      elseif code == 401 or code == 403 then
+        task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
+      elseif code == 202 then
+        task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
+      elseif code == 200 then
+        local parser = ucl.parser()
+        local res,json_err = parser:parse_string(body)
+
+        if res then
+          local obj = parser:get_object()
+          handle_yomi_result(obj, task, rule)
+        else
+          -- not res
+          rspamd_logger.errx(task, 'Yomi invalid response')
+          
+          if should_retransmit() then
+            hash_http_callback(http_err, code, body, headers)
+          end
+        end
+      else
+        rspamd_logger.errx(task, 'invalid HTTP code: %s, body: %s, headers: %s', code, body, headers)
+        
+        if should_retransmit() then
+          hash_http_callback(http_err, code, body, headers)
+        end
+      end
+    end
+  end
+
+  request_data.callback = hash_http_callback
+  http.request(request_data)
 end
 
 return {
