@@ -137,8 +137,33 @@ local function yomi_upload(task, content, hash, auth, rule)
   http.request(request_data)
 end
 
+local function should_skip_mime(task, content)
+  local mime_parts = task:get_parts() or {}
+
+  for _, mime_part in ipairs(mime_parts) do
+    local string_content = tostring(content)
+    local string_part_content = tostring(mime_part:get_content())
+
+    if string_content == string_part_content then
+      local detected_type = mime_part:get_detected_ext()
+
+      if detected_type == 'pdf' or detected_type == 'html' or detected_type == 'epub' then
+        rspamd_logger.infox(task, 'File not submitted because of its mime type: %s', detected_type)
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function yomi_check(task, content, digest, rule)
   rspamd_logger.infox(task, '%s: executing Yomi virus check', rule.log_prefix)
+
+  if should_skip_mime(task, content) then
+    task:insert_result('YOMI_MIME_SKIPPED', 1, 'File not submitted because of its mime type')
+    return
+  end
+
   local system_id = rule.system_id
   local secret = rule.secret
   local auth = string.format("Basic %s", rspamd_util.encode_base64(system_id .. ":" .. secret))
@@ -149,6 +174,7 @@ local function yomi_check(task, content, digest, rule)
 
   local url = string.format('%s/hash/%s', rule.url, hash)
   rspamd_logger.infox(task, '%s: sending request %s', rule.log_prefix, url)
+
   local request_data = {
     task = task,
     url = url,
