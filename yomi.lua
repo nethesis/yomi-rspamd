@@ -6,6 +6,7 @@ local rspamd_cryptobox_hash = require "rspamd_cryptobox_hash"
 local rspamd_logger = require "rspamd_logger"
 local rspamd_util = require "rspamd_util"
 local ucl = require "ucl"
+local common = require "lua_scanners/common"
 
 local N = 'yomi'
 
@@ -35,7 +36,10 @@ local function yomi_config(opts)
     scan_image_mime = false,
     virus_score = 0.7,
     suspicious_score = 0.4,
-    skip_mime_types = {} -- file types to skip, e.g. { "pdf", "epub" }
+    skip_mime_types = {}, -- file types to skip, e.g. { "pdf", "epub" }
+    clean_weight = -0.5,
+    suspicious_weight = 2,
+    virus_weight = 5
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -81,13 +85,13 @@ local function handle_yomi_result(result, task, rule)
 
   -- A file is a virus if the score is greater than virus_score
   if score > rule.virus_score then
-    task:insert_result('YOMI_VIRUS', 1, 'Virus found by Yomi: ' .. malware_description)
+    task:insert_result(true, 'YOMI_VIRUS', rule.virus_weight, 'Virus found by Yomi: ' .. malware_description)
   elseif score > rule.suspicious_score then
-    task:insert_result('YOMI_SUSPICIOUS', 1, 'Suspicious file found by Yomi: ' .. malware_description)
+    task:insert_result(true, 'YOMI_SUSPICIOUS', rule.suspicious_weight, 'Suspiscious file found by Yomi: ' .. malware_description)
   elseif score < 0 then
-    task:insert_result('YOMI_UNKNOWN', 1, "Yomi wasn't able to compute a score: " .. malware_description)
+    task:insert_result('YOMI_UNKNOWN', 0, "Yomi wasn't able to compute a score: " .. malware_description)
   else
-    task:insert_result('YOMI_CLEAN', 1, 'File is clean')
+    task:insert_result(true, 'YOMI_CLEAN', rule.clean_weight, 'File is clean')
   end
 end
 
