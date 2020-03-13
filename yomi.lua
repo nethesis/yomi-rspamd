@@ -9,6 +9,14 @@ local ucl = require "ucl"
 
 local N = 'yomi'
 
+function Set (list)
+  local set = {}
+  for _, l in ipairs(list) do
+    set[l] = true
+  end
+  return set
+end
+
 local function yomi_config(opts)
 
   local default_conf = {
@@ -26,7 +34,8 @@ local function yomi_config(opts)
     scan_text_mime = false,
     scan_image_mime = false,
     virus_score = 0.7,
-    suspicious_score = 0.4
+    suspicious_score = 0.4,
+    skip_mime_types = {} -- file types to skip, e.g. { "pdf", "epub" }
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -44,6 +53,7 @@ local function yomi_config(opts)
     end
   end
 
+  default_conf.skip_mime_types = Set(default_conf.skip_mime_types)
   lua_util.add_debug_alias('external_services', default_conf.name)
   return default_conf
 end
@@ -140,7 +150,7 @@ local function yomi_upload(task, content, hash, auth, rule)
   http.request(request_data)
 end
 
-local function should_skip_mime(task, content)
+local function should_skip_mime(task, content, rule)
   local mime_parts = task:get_parts() or {}
 
   for _, mime_part in ipairs(mime_parts) do
@@ -150,7 +160,7 @@ local function should_skip_mime(task, content)
     if string_content == string_part_content then
       local detected_type = mime_part:get_detected_ext()
 
-      if detected_type == 'pdf' or detected_type == 'html' or detected_type == 'epub' then
+      if rule.skip_mime_types[detected_type] then
         rspamd_logger.infox(task, 'File not submitted because of its mime type: %s', detected_type)
         return true
       end
@@ -162,7 +172,7 @@ end
 local function yomi_check(task, content, digest, rule)
   rspamd_logger.infox(task, '%s: executing Yomi virus check', rule.log_prefix)
 
-  if should_skip_mime(task, content) then
+  if should_skip_mime(task, content, rule) then
     task:insert_result('YOMI_MIME_SKIPPED', 1, 'File not submitted because of its mime type')
     return
   end
