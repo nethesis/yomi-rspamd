@@ -87,7 +87,7 @@ local function handle_yomi_result(result, task, rule)
   if score > rule.virus_score then
     task:insert_result(true, 'YOMI_VIRUS', rule.virus_weight, 'Virus found by Yomi: ' .. malware_description)
   elseif score > rule.suspicious_score then
-    task:insert_result(true, 'YOMI_SUSPICIOUS', rule.suspicious_weight, 'Suspiscious file found by Yomi: ' .. malware_description)
+    task:insert_result(true, 'YOMI_SUSPICIOUS', rule.suspicious_weight, 'Suspicious file found by Yomi: ' .. malware_description)
   elseif score < 0 then
     task:insert_result(true, 'YOMI_UNKNOWN', 0, "Yomi wasn't able to compute a score: " .. malware_description)
   else
