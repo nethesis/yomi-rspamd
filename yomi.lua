@@ -87,22 +87,32 @@ local function handle_yomi_result(result, task, rule, digest)
 
   if score then
     local symbol = ''
+    local weight = 0
+    local description = ''
     -- a file is a virus if the score is greater than virus_score
     if score > rule.virus_score then
       symbol = 'YOMI_VIRUS'
-      task:insert_result(true, symbol, rule.virus_weight, 'Virus found by Yomi: ' .. malware_description)
+      weight = rule.virus_weight
+      description = 'Virus found by Yomi: ' .. malware_description
+      task:insert_result(true, symbol, weight, description)
     elseif score > rule.suspicious_score then
       symbol = 'YOMI_SUSPICIOUS'
-      task:insert_result(true, symbol, rule.suspicious_weight, 'Suspicious file found by Yomi: ' .. malware_description)
+      weight = rule.suspicious_weight
+      description = 'Suspicious file found by Yomi: ' .. malware_description
+      task:insert_result(true, symbol, weight, description)
     elseif score < 0 then
       symbol = 'YOMI_UNKNOWN'
-      task:insert_result(true, symbol, 0, "Yomi wasn't able to compute a score: " .. malware_description)
+      weight = 0
+      description = "Yomi wasn't able to compute a score: " .. malware_description
+      task:insert_result(true, symbol, weight, description)
     else
       symbol = 'YOMI_CLEAN'
-      task:insert_result(true, symbol, rule.clean_weight, 'File is clean')
+      weight = rule.clean_weight
+      description = 'File is clean: ' .. malware_description
+      task:insert_result(true, symbol, weight, description)
     end
 
-    common.save_cache(task, digest, rule, { symbol, malware_description}, 0.0)
+    common.save_cache(task, digest, rule, { symbol, weight, description }, 0.0)
   end
 end
 
@@ -184,78 +194,6 @@ local function should_skip_mime(task, content, rule)
   return false
 end
 
-local function message_not_too_large(task, content, rule)
-  local max_size = tonumber(rule.max_size)
-  if not max_size then return true end
-  if #content > max_size then
-    rspamd_logger.infox(task, "skip %s check as it is too large: %s (%s is allowed)",
-        rule.log_prefix, #content, max_size)
-    return false
-  end
-  return true
-end
-
-local function message_not_too_small(task, content, rule)
-  local min_size = tonumber(rule.min_size)
-  if not min_size then return true end
-  if #content < min_size then
-    rspamd_logger.infox(task, "skip %s check as it is too small: %s (%s is allowed)",
-        rule.log_prefix, #content, min_size)
-    return false
-  end
-  return true
-end
-
-local function message_min_words(task, rule)
-  if rule.text_part_min_words then
-    local text_parts_empty = false
-    local text_parts = task:get_text_parts()
-
-    local filter_func = function(p)
-      return p:get_words_count() <= tonumber(rule.text_part_min_words)
-    end
-
-    fun.each(function(p)
-      text_parts_empty = true
-      rspamd_logger.infox(task, '%s: #words is less then text_part_min_words: %s',
-        rule.log_prefix, rule.text_part_min_words)
-    end, fun.filter(filter_func, text_parts))
-
-    return text_parts_empty
-  else
-    return true
-  end
-end
-
-local function dynamic_scan(task, rule)
-  if rule.dynamic_scan then
-    if rule.action ~= 'reject' then
-      local metric_result = task:get_metric_score('default')
-      local metric_action = task:get_metric_action('default')
-      local has_pre_result = task:has_pre_result()
-      -- ToDo: needed?
-      -- Sometimes leads to FPs
-      --if rule.symbol_type == 'postfilter' and metric_action == 'reject' then
-      --  rspamd_logger.infox(task, '%s: aborting: %s', rule.log_prefix, "result is already reject")
-      --  return false
-      --elseif metric_result[1] > metric_result[2]*2 then
-      if metric_result[1] > metric_result[2]*2 then
-        rspamd_logger.infox(task, '%s: aborting: %s', rule.log_prefix, 'score > 2 * reject_level: ' .. metric_result[1])
-        return false
-      elseif has_pre_result and metric_action == 'reject' then
-        rspamd_logger.infox(task, '%s: aborting: %s', rule.log_prefix, 'pre_result reject is set')
-        return false
-      else
-        return true, 'undecided'
-      end
-    else
-      return true, 'dynamic_scan is not possible with config `action=reject;`'
-    end
-  else
-    return true
-  end
-end
-
 local function condition_check_and_continue(task, content, rule, digest, fn)
   local uncached = true
   local key = digest
@@ -267,18 +205,10 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
       local threat_string = lua_util.str_split(data[1], '\v')
       local score = data[2] or rule.default_score
       local symbol = threat_string[1]
-      local malware_description = threat_string[2]
-
-      if symbol == 'YOMI_VIRUS' then
-        task:insert_result(true, symbol, rule.virus_weight, 'Virus found by Yomi: ' .. malware_description)
-      elseif symbol == 'YOMI_SUSPICIOUS' then
-        task:insert_result(true, symbol, rule.suspicious_weight, 'Suspicious file found by Yomi: ' .. malware_description)
-      elseif symbol == 'YOMI_UNKNOWN' then
-        task:insert_result(true, symbol, 0, "Yomi wasn't able to compute a score: " .. malware_description)
-      elseif symbol == 'YOMI_CLEAN' then
-        task:insert_result(true, symbol, rule.clean_weight, 'File is clean')
-      end
-
+      local weight = threat_string[2]
+      local description = threat_string[3]
+      rspamd_logger.infox(task, 'Cache hit: %s, %s, %s', symbol, weight, description)
+      task:insert_result(true, symbol, weight, description)
       uncached = false
     else
       if err then
@@ -286,25 +216,12 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
       end
     end
 
-    local f_message_not_too_large = message_not_too_large(task, content, rule)
-    local f_message_not_too_small = message_not_too_small(task, content, rule)
-    local f_message_min_words = message_min_words(task, rule)
-    local f_dynamic_scan = dynamic_scan(task, rule)
-
-    if uncached and
-      f_message_not_too_large and
-      f_message_not_too_small and
-      f_message_min_words and
-      f_dynamic_scan then
-
+    if uncached then
       fn()
-
     end
-
   end
 
   if rule.redis_params and not rule.no_cache then
-
     key = rule.prefix .. key
 
     if lua_redis.redis_make_request(task,
@@ -318,7 +235,6 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
       return true
     end
   end
-
   return false
 end
 
