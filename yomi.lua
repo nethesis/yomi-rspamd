@@ -27,7 +27,6 @@ local function yomi_config(opts)
     timeout = 5.0,
     log_virus = true,
     log_suspicious = true,
-    log_virus = true,
     log_unsure = true,
     log_clean = true,
     log_not_submitted = true,
