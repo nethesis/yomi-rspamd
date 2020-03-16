@@ -27,9 +27,9 @@ local function yomi_config(opts)
     timeout = 5.0,
     log_virus = true,
     log_suspicious = true,
-    log_unsure = true,
-    log_clean = true,
-    log_not_submitted = true,
+    log_unknown = false,
+    log_clean = false,
+    log_not_submitted = false,
     log_http_return_code = false,
     retransmits = 3,
     retransmit_delay = 3,
@@ -114,13 +114,13 @@ local function handle_yomi_result(result, task, rule, digest)
       weight = rule.suspicious_weight
       description = string.format('Suspicious file found: %s, score: %s', malware_description, score)
       task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_unsure, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+      log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     elseif score < 0 then
       symbol = 'YOMI_UNKNOWN'
       weight = 0
       description = "Unable to compute a score: " .. malware_description
       task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_unsure, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+      log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     else
       symbol = 'YOMI_CLEAN'
       weight = rule.clean_weight
