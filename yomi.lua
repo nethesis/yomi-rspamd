@@ -73,7 +73,7 @@ local function sleep(n)
   os.execute("sleep " .. tonumber(n))
 end
 
-local function should_retransmit()
+local function should_retransmit(task, rule)
   if rule.retransmits > 0 then
     rule.retransmits = rule.retransmits -1
     sleep(rule.retransmit_delay)
@@ -154,7 +154,7 @@ local function yomi_upload(task, content, hash, auth, rule)
     if http_err then
       rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
       
-      if should_retransmit() then
+      if should_retransmit(task, rule) then
         upload_http_callback(http_err, code, body, headers)
       end
     else
@@ -176,14 +176,14 @@ local function yomi_upload(task, content, hash, auth, rule)
           -- not res
           rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
           
-          if should_retransmit() then
+          if should_retransmit(task, rule) then
             upload_http_callback(http_err, code, body, headers)
           end
         end
       else
         rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
         
-        if should_retransmit() then
+        if should_retransmit(task, rule) then
           upload_http_callback(http_err, code, body, headers)
         end
       end
@@ -291,7 +291,7 @@ local function yomi_check(task, content, digest, rule)
       if http_err then
         rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
         
-        if should_retransmit() then
+        if should_retransmit(task, rule) then
           hash_http_callback(http_err, code, body, headers)
         end
       else
@@ -316,14 +316,14 @@ local function yomi_check(task, content, digest, rule)
             -- not res
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
             
-            if should_retransmit() then
+            if should_retransmit(task, rule) then
               hash_http_callback(http_err, code, body, headers)
             end
           end
         else
           rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
           
-          if should_retransmit() then
+          if should_retransmit(task, rule) then
             hash_http_callback(http_err, code, body, headers)
           end
         end
