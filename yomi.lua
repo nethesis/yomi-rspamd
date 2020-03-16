@@ -30,7 +30,7 @@ local function yomi_config(opts)
     log_unsure = true,
     log_clean = true,
     log_not_submitted = true,
-    log_http_return_code = true,
+    log_http_return_code = false,
     retransmits = 3,
     retransmit_delay = 3,
     message = '${SCANNER}: spam message found: "${VIRUS}"',
