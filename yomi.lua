@@ -228,7 +228,7 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_error_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_FAIL', 1, 'Maximum error retransmits exceed')
+        task:insert_result(true, 'YOMI_FAIL', 1, 'Maximum error retransmits exceeded')
       end
       
       return false
