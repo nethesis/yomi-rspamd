@@ -240,8 +240,8 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_hash_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum hash retransmits exceed')
-        common.yield_result(task, rule, 'Maximum hash retransmits exceed', 0.0, 'fail')
+        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum hash retransmits exceeded')
+        common.yield_result(task, rule, 'Maximum hash retransmits exceeded', 0.0, 'fail')
       end
       
       return false
