@@ -31,8 +31,10 @@ local function yomi_config(opts)
     log_clean = false,
     log_not_submitted = false,
     log_http_return_code = false,
-    retransmits = 3,
-    retransmit_delay = 3,
+    error_retransmits = 3,
+    hash_retransmits = 7,
+    retransmit_error_delay = 3,
+    retransmit_hash_delay = 1,
     message = '${SCANNER}: spam message found: "${VIRUS}"',
     detection_category = "virus",
     default_score = 1,
@@ -74,12 +76,24 @@ local function sleep(n)
 end
 
 local function should_retransmit(task, rule)
-  if rule.retransmits > 0 then
-    rule.retransmits = rule.retransmits -1
-    sleep(rule.retransmit_delay)
+  if rule.error_retransmits > 0 then
+    rule.error_retransmits = rule.error_retransmits -1
+    sleep(rule.retransmit_error_delay)
     return true
   else
-    task:insert_result('YOMI_FAIL', 1, 'Maximum retransmits exceed')
+    task:insert_result(true, 'YOMI_FAIL', 1, 'Maximum error retransmits exceed')
+  end
+  
+  return false
+end
+
+local function should_retransmit_hash(task, rule)
+  if rule.hash_retransmits > 0 then
+    rule.hash_retransmits = rule.hash_retransmits -1
+    sleep(rule.retransmit_hash_delay)
+    return true
+  else
+    task:insert_result(true, 'YOMI_FAIL', 1, 'Maximum hash retransmits exceed')
   end
   
   return false
@@ -94,9 +108,9 @@ local function log_message(info_level, message, task)
 end
 
 local function handle_yomi_result(result, task, rule, digest)
-  rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
   local score = result['score']
   local malware_description = result['description']
+  rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
 
   if score then
     local symbol = ''
@@ -155,16 +169,16 @@ local function yomi_upload(task, content, hash, auth, rule)
       rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
       
       if should_retransmit(task, rule) then
-        upload_http_callback(http_err, code, body, headers)
+        yomi_upload(task, content, hash, auth, rule)
       end
     else
       log_message(rule.log_http_return_code, string.format('%s: upload returned %s', rule.log_prefix, code), task)
 
       if code == 202 then
-        task:insert_result('YOMI_WAIT', 1, 'File uploaded')
-        task:insert_result('CLAM_VIRUS_FAIL', 1, 'File uploaded')
+        task:insert_result(true, 'YOMI_WAIT', 1, 'File uploaded')
+        common.yield_result(task, rule, 'File uploaded', 0.0, 'fail')
       elseif code == 401 or code == 403 then
-        task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
+        task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
       elseif code == 200 then
         local parser = ucl.parser()
         local res,json_err = parser:parse_string(body)
@@ -177,14 +191,14 @@ local function yomi_upload(task, content, hash, auth, rule)
           rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
           
           if should_retransmit(task, rule) then
-            upload_http_callback(http_err, code, body, headers)
+            yomi_upload(task, content, hash, auth, rule)
           end
         end
       else
         rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
         
         if should_retransmit(task, rule) then
-          upload_http_callback(http_err, code, body, headers)
+          yomi_upload(task, content, hash, auth, rule)
         end
       end
     end
@@ -263,7 +277,7 @@ local function yomi_check(task, content, digest, rule)
     rspamd_logger.debugm(N, task, '%s: executing Yomi virus check', rule.log_prefix)
 
     if should_skip_mime(task, content, rule) then
-      task:insert_result('YOMI_MIME_SKIPPED', 1, 'File not submitted because of its mime type')
+      task:insert_result(true, 'YOMI_MIME_SKIPPED', 1, 'File not submitted because of its mime type')
       return
     end
 
@@ -292,7 +306,7 @@ local function yomi_check(task, content, digest, rule)
         rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
         
         if should_retransmit(task, rule) then
-          hash_http_callback(http_err, code, body, headers)
+          yomi_check_uncached()
         end
       else
         log_message(rule.log_http_return_code, string.format('%s: hash returned %s', rule.log_prefix, code), task)
@@ -301,10 +315,11 @@ local function yomi_check(task, content, digest, rule)
           rspamd_logger.debugm(N, task, '%s: hash %s not found', rule.log_prefix, hash)
           yomi_upload(task, content, hash, auth, rule)
         elseif code == 401 or code == 403 then
-          task:insert_result('YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
+          task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
         elseif code == 202 then
-          task:insert_result('YOMI_WAIT', 1, 'Sandbox in progress')
-          task:insert_result('CLAM_VIRUS_FAIL', 1, 'Sandbox in progress')
+          if should_retransmit_hash(task, rule) then
+            yomi_check_uncached()
+          end
         elseif code == 200 then
           local parser = ucl.parser()
           local res,json_err = parser:parse_string(body)
@@ -317,14 +332,14 @@ local function yomi_check(task, content, digest, rule)
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
             
             if should_retransmit(task, rule) then
-              hash_http_callback(http_err, code, body, headers)
+              yomi_check_uncached()
             end
           end
         else
           rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
           
           if should_retransmit(task, rule) then
-            hash_http_callback(http_err, code, body, headers)
+            yomi_check_uncached()
           end
         end
       end
