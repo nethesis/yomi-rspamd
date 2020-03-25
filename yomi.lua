@@ -222,13 +222,17 @@ local function yomi_check(task, content, digest, rule)
       },
     }
 
-    local function should_retransmit()
+    local function should_retransmit(http_code)
       if error_retransmits > 0 then
         error_retransmits = error_retransmits -1
         sleep(rule.retransmit_error_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_FAIL', 1, 'Maximum error retransmits exceeded')
+        symbol = 'YOMI_UNKNOWN'
+        weight = 0
+        description = string.format('Maximum error retransmits exceeded (HTTP %s)', http_code)
+        task:insert_result(true, symbol, weight, description)
+        log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
       end
       
       return false
@@ -336,14 +340,14 @@ local function yomi_check(task, content, digest, rule)
             -- not res
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
             
-            if should_retransmit() then
+            if should_retransmit(code) then
               yomi_check_uncached()
             end
           end
         else
           rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
           
-          if should_retransmit() then
+          if should_retransmit(code) then
             yomi_check_uncached()
           end
         end
