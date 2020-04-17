@@ -335,8 +335,8 @@ local function yomi_check(task, content, digest, rule)
 
             if state and state == 'WAITING' then
               -- upload in progress
-              task:insert_result(true, 'YOMI_WAIT', 1, 'Upload in progress')
-              common.yield_result(task, rule, 'Upload in progress', 0.0, 'fail')
+              task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
+              common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
             else
               -- hash should be ready in a moment
               if should_retransmit_hash() then
