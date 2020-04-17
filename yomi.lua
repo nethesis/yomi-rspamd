@@ -326,8 +326,30 @@ local function yomi_check(task, content, digest, rule)
         elseif code == 401 or code == 403 then
           task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
         elseif code == 202 then
-          if should_retransmit_hash() then
-            yomi_check_uncached()
+          local parser = ucl.parser()
+          local res, json_err = parser:parse_string(body)
+
+          if res then
+            local obj = parser:get_object()
+            local state = obj['state']
+
+            if state and state == 'WAITING' then
+              -- upload in progress
+              task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
+              common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
+            else
+              -- hash should be ready in a moment
+              if should_retransmit_hash() then
+                yomi_check_uncached()
+              end
+            end
+          else
+            -- not res
+            rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
+
+            if should_retransmit(code) then
+              yomi_check_uncached()
+            end
           end
         elseif code == 200 then
           local parser = ucl.parser()
