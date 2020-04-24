@@ -125,26 +125,6 @@ local function handle_yomi_result(result, task, rule, digest)
   end
 end
 
-local function should_skip_mime(task, content, rule)
-  local mime_parts = task:get_parts() or {}
-
-  for _, mime_part in ipairs(mime_parts) do
-    local string_content = tostring(content)
-    local string_part_content = tostring(mime_part:get_content())
-
-    if string_content == string_part_content then
-      local detected_type = mime_part:get_detected_ext()
-
-      if rule.skip_mime_types[detected_type] then
-        log_message(rule.log_not_submitted, 
-            string.format('%s: file not submitted because of its mime type: %s', rule.log_prefix, detected_type), task)
-        return true
-      end
-    end
-  end
-  return false
-end
-
 local function condition_check_and_continue(task, content, rule, digest, fn)
   local uncached = true
   local key = digest
@@ -189,16 +169,44 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
   return false
 end
 
-local function yomi_check(task, content, digest, rule)
+local function should_skip_mime(detected_type, task, rule)
+  if rule.skip_mime_types[detected_type] then
+    log_message(rule.log_not_submitted,
+        string.format('%s: file not submitted because of its mime type: %s', rule.log_prefix, detected_type), task)
+    return true
+  else
+    return false
+  end
+end
 
+local function get_attachment_info(task, content, rule)
+  local attachment_info = {}
+  local mime_parts = task:get_parts() or {}
+
+  for _, mime_part in ipairs(mime_parts) do
+    local string_content = tostring(content)
+    local string_part_content = tostring(mime_part:get_content())
+
+    if string_content == string_part_content then
+      local detected_type = mime_part:get_detected_ext()
+      local file_name = mime_part:get_filename()
+      attachment_info['detected_type'] = detected_type
+      attachment_info['file_name'] = file_name
+    end
+  end
+  return attachment_info
+end
+
+local function yomi_check(task, content, digest, rule)
   local hash_retransmits = rule.hash_retransmits
   local error_retransmits = rule.error_retransmits
 
   local function yomi_check_uncached ()
     rspamd_logger.debugm(N, task, '%s: executing Yomi virus check', rule.log_prefix)
+    local attachment_info = get_attachment_info(task, content, rule)
 
-    if should_skip_mime(task, content, rule) then
-      task:insert_result(true, 'YOMI_MIME_SKIPPED', 1, 'File not submitted because of its mime type')
+    if should_skip_mime(attachment_info['detected_type'], task, rule) then
+      task:insert_result(true, 'YOMI_MIME_SKIPPED', 0, 'File not submitted because of its mime type')
       return
     end
 
@@ -253,7 +261,7 @@ local function yomi_check(task, content, digest, rule)
 
     local function yomi_upload(task, content, hash, auth, rule)
       rspamd_logger.debugm(N, task, '%s: uploading to sandbox', rule.log_prefix)
-    
+
       local request_data = {
         task = task,
         url = string.format('%s/submit', rule.url),
@@ -263,7 +271,7 @@ local function yomi_check(task, content, digest, rule)
         headers = {
           ['Authorization'] = auth
         },
-        body = string.format('{"file": "%s", "hash": "%s"}', rspamd_util.encode_base64(content), hash)
+        body = string.format('{"file": "%s", "hash": "%s", "name": "%s"}', rspamd_util.encode_base64(content), hash, attachment_info['file_name'])
       }
     
       local function upload_http_callback(http_err, code, body, headers)
