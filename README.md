@@ -54,4 +54,4 @@ The rspamd plugin can insert the following symbols inside the mail header:
 - `YOMI_UNKNOWN`: the Sandbox wasn't able to compute a score for the file
 - `YOMI_WAIT`: if the file is being processed inside the Sandbox, also add the CLAM_VIRUS_FAIL symbol to handle the soft reject
 - `YOMI_UNAUTHORIZED`: if the proxy cannot grant authentication or authorization
-- `YOMI_MIME_SKIPPED`: if the file has not been submitted to proxy because of its mime type. Currently PDF, HTML and EPUB files are not submitted
+- `YOMI_SKIPPED`: if YOMI check was skipped because the sender is authenticated or the mime type of the file is considered safe. By default PDF, HTML, EPUB and text files are considered safe
