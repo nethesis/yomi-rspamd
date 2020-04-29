@@ -172,7 +172,7 @@ end
 local function should_skip_mime(detected_type, task, rule)
   if rule.skip_mime_types[detected_type] then
     log_message(rule.log_not_submitted,
-        string.format('%s: file not submitted because of its mime type: %s', rule.log_prefix, detected_type), task)
+        string.format('%s: file not submitted because of its MIME type: %s', rule.log_prefix, detected_type), task)
     return true
   else
     return false
@@ -203,10 +203,20 @@ local function yomi_check(task, content, digest, rule)
 
   local function yomi_check_uncached ()
     rspamd_logger.debugm(N, task, '%s: executing Yomi virus check', rule.log_prefix)
-    local attachment_info = get_attachment_info(task, content, rule)
 
-    if should_skip_mime(attachment_info['detected_type'], task, rule) then
-      task:insert_result(true, 'YOMI_MIME_SKIPPED', 0, 'File not submitted because of its mime type')
+    -- skip check if sender is authenticated
+    local sender = task:get_user()
+
+    if not (sender == nil or sender == '') then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, 'Sender is authenticated')
+      return
+    end
+
+    local attachment_info = get_attachment_info(task, content, rule)
+    local detected_type = attachment_info['detected_type']
+
+    if should_skip_mime(detected_type, task, rule) then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('MIME type to skip: %s', detected_type))
       return
     end
 
@@ -282,7 +292,7 @@ local function yomi_check(task, content, digest, rule)
             yomi_upload(task, content, hash, auth, rule)
           end
         else
-          log_message(rule.log_http_return_code, string.format('%s: upload returned %s', rule.log_prefix, code), task)
+          log_message(rule.log_http_return_code, string.format('%s: upload returned %s (hash: %s)', rule.log_prefix, code, hash), task)
     
           if code == 202 then
             task:insert_result(true, 'YOMI_WAIT', 1, 'File uploaded')
@@ -326,7 +336,7 @@ local function yomi_check(task, content, digest, rule)
           yomi_check_uncached()
         end
       else
-        log_message(rule.log_http_return_code, string.format('%s: hash returned %s', rule.log_prefix, code), task)
+        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (hash: %s)', rule.log_prefix, code, hash), task)
 
         if code == 404 then
           rspamd_logger.debugm(N, task, '%s: hash %s not found', rule.log_prefix, hash)
