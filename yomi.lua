@@ -49,6 +49,7 @@ local function yomi_config(opts)
     suspicious_weight = 2,
     virus_weight = 5,
     cache_expire = 7200, -- expire redis in 2h
+    tmpdir = '/tmp',
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -179,6 +180,28 @@ local function should_skip_mime(detected_type, task, rule)
   end
 end
 
+local function get_mime_type(file_name, task, content, rule)
+  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, file_name .. '-' .. rspamd_util.random_hex(16))
+  local attachment_fd = rspamd_util.create_file(attachment_filename)
+  content:save_in_file(attachment_fd)
+
+  -- rspamd_logger.infox(task, string.format('attachment_filename:  %s', attachment_filename)) -- ////
+
+  local handle = io.popen('/usr/bin/file -b --mime-type ' .. attachment_filename)
+  local result = handle:read("*a")
+  local mime_type = string.gsub(result, "\n", "")
+  handle:close()
+
+  -- rspamd_logger.infox(task, '#' .. mime_type .. '#') -- ////
+
+  task:get_mempool():add_destructor(function()
+    os.remove(attachment_filename)
+    rspamd_util.close_file(attachment_fd)
+  end)
+
+  return mime_type
+end
+
 local function get_attachment_info(task, content, rule)
   local attachment_info = {}
   local mime_parts = task:get_parts() or {}
@@ -188,10 +211,10 @@ local function get_attachment_info(task, content, rule)
     local string_part_content = tostring(mime_part:get_content())
 
     if string_content == string_part_content then
-      local detected_type = mime_part:get_detected_ext()
       local file_name = mime_part:get_filename()
-      attachment_info['detected_type'] = detected_type
+      local mime_type = get_mime_type(file_name, task, content, rule)
       attachment_info['file_name'] = file_name
+      attachment_info['detected_type'] = mime_type
     end
   end
   return attachment_info
