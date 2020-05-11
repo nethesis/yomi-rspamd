@@ -185,18 +185,14 @@ local function get_mime_type(file_name, task, content, rule)
   local attachment_fd = rspamd_util.create_file(attachment_filename)
   content:save_in_file(attachment_fd)
 
-  -- rspamd_logger.infox(task, string.format('attachment_filename:  %s', attachment_filename)) -- ////
-
   local handle = io.popen('/usr/bin/file -b --mime-type ' .. attachment_filename)
   local result = handle:read("*a")
   local mime_type = string.gsub(result, "\n", "")
   handle:close()
 
-  -- rspamd_logger.infox(task, '#' .. mime_type .. '#') -- ////
-
   task:get_mempool():add_destructor(function()
-    os.remove(attachment_filename)
     rspamd_util.close_file(attachment_fd)
+    os.remove(attachment_filename)
   end)
 
   return mime_type
