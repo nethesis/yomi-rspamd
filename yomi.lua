@@ -180,12 +180,13 @@ local function should_skip_mime(detected_type, task, rule)
   end
 end
 
-local function get_mime_type(file_name, task, content, rule)
-  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, file_name .. '-' .. rspamd_util.random_hex(16))
+local function get_mime_type(task, content, rule)
+  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, rspamd_util.random_hex(32))
+
   local attachment_fd = rspamd_util.create_file(attachment_filename)
   content:save_in_file(attachment_fd)
 
-  local handle = io.popen('/usr/bin/file -b --mime-type ' .. attachment_filename)
+  local handle = io.popen(string.format('/usr/bin/file -b --mime-type \'%s\'', attachment_filename))
   local result = handle:read("*a")
   local mime_type = string.gsub(result, "\n", "")
   handle:close()
@@ -208,9 +209,12 @@ local function get_attachment_info(task, content, rule)
 
     if string_content == string_part_content then
       local file_name = mime_part:get_filename()
-      local mime_type = get_mime_type(file_name, task, content, rule)
-      attachment_info['file_name'] = file_name
-      attachment_info['detected_type'] = mime_type
+
+      if file_name ~= nil then
+        local mime_type = get_mime_type(task, content, rule)
+        attachment_info['file_name'] = file_name
+        attachment_info['detected_type'] = mime_type
+      end
     end
   end
   return attachment_info
@@ -232,6 +236,12 @@ local function yomi_check(task, content, digest, rule)
     end
 
     local attachment_info = get_attachment_info(task, content, rule)
+
+    if attachment_info['file_name'] == nil then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('No file associated with part'))
+      return
+    end
+
     local detected_type = attachment_info['detected_type']
 
     if should_skip_mime(detected_type, task, rule) then
