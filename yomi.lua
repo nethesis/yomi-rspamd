@@ -89,6 +89,48 @@ local function log_message(info_level, message, task)
   end
 end
 
+local function handle_yomi_result(result, task, rule, digest, file_name)
+  local score = result['score']
+  local malware_description = result['description']
+  rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
+
+  if score then
+    local symbol = ''
+    local weight = 0
+    local description = ''
+    -- a file is a virus if the score is greater than virus_score
+    if score > rule.virus_score then
+      symbol = 'YOMI_VIRUS'
+      weight = rule.virus_weight
+      description = string.format('%s is dangerous: %s, score: %s', file_name, malware_description, score)
+      task:insert_result(true, symbol, weight, description)
+      log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+    elseif score > rule.suspicious_score then
+      symbol = 'YOMI_SUSPICIOUS'
+      weight = rule.suspicious_weight
+      description = string.format('%s is suspicious: %s, score: %s', file_name, malware_description, score)
+      task:insert_result(true, symbol, weight, description)
+      log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+    elseif score < 0 then
+      symbol = 'YOMI_UNKNOWN'
+      weight = 0
+      description = string.format('Unable to compute a score for %s: %s', file_name, malware_description)
+      task:insert_result(true, symbol, weight, description)
+      log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+    else
+      symbol = 'YOMI_CLEAN'
+      weight = rule.clean_weight
+      description = string.format('%s is clean, score: %s', file_name, score)
+      task:insert_result(true, symbol, weight, description)
+      log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+    end
+
+    local cache_entry = { symbol, weight, description }
+    rspamd_logger.debugm(N, task, '%s: saving to cache %s', rule.log_prefix, cache_entry)
+    common.save_cache(task, digest, rule, cache_entry, 0.0)
+  end
+end
+
 local function condition_check_and_continue(task, content, rule, digest, fn)
   local uncached = true
   local key = digest
@@ -240,48 +282,6 @@ local function yomi_check(task, content, digest, rule)
       },
     }
 
-    local function handle_yomi_result(result, task, rule, digest)
-      local score = result['score']
-      local malware_description = result['description']
-      rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
-
-      if score then
-        local symbol = ''
-        local weight = 0
-        local description = ''
-        -- a file is a virus if the score is greater than virus_score
-        if score > rule.virus_score then
-          symbol = 'YOMI_VIRUS'
-          weight = rule.virus_weight
-          description = string.format('%s is dangerous: %s, score: %s', file_name, malware_description, score)
-          task:insert_result(true, symbol, weight, description)
-          log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-        elseif score > rule.suspicious_score then
-          symbol = 'YOMI_SUSPICIOUS'
-          weight = rule.suspicious_weight
-          description = string.format('%s is suspicious: %s, score: %s', file_name, malware_description, score)
-          task:insert_result(true, symbol, weight, description)
-          log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-        elseif score < 0 then
-          symbol = 'YOMI_UNKNOWN'
-          weight = 0
-          description = string.format('Unable to compute a score for %s: %s', file_name, malware_description)
-          task:insert_result(true, symbol, weight, description)
-          log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-        else
-          symbol = 'YOMI_CLEAN'
-          weight = rule.clean_weight
-          description = string.format('%s is clean, score: %s', file_name, score)
-          task:insert_result(true, symbol, weight, description)
-          log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-        end
-
-        local cache_entry = { symbol, weight, description }
-        rspamd_logger.debugm(N, task, '%s: saving to cache %s', rule.log_prefix, cache_entry)
-        common.save_cache(task, digest, rule, cache_entry, 0.0)
-      end
-    end
-
     local function should_retransmit(http_code)
       if error_retransmits > 0 then
         error_retransmits = error_retransmits -1
@@ -360,7 +360,7 @@ local function yomi_check(task, content, digest, rule)
     
             if res then
               local obj = parser:get_object()
-              handle_yomi_result(obj, task, rule, digest)
+              handle_yomi_result(obj, task, rule, digest, file_name)
             else
               -- not res
               rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
@@ -446,7 +446,7 @@ local function yomi_check(task, content, digest, rule)
 
             if res then
               local obj = parser:get_object()
-              handle_yomi_result(obj, task, rule, digest)
+              handle_yomi_result(obj, task, rule, digest, file_name)
             else
               -- not res
               rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
@@ -523,7 +523,7 @@ local function yomi_check(task, content, digest, rule)
 
           if res then
             local obj = parser:get_object()
-            handle_yomi_result(obj, task, rule, digest)
+            handle_yomi_result(obj, task, rule, digest, file_name)
           else
             -- not res
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
