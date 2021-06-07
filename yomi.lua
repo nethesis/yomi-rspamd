@@ -32,6 +32,8 @@ local function yomi_config(opts)
     log_not_submitted = false,
     log_http_return_code = false,
     log_submission_state = false,
+    log_attachment_mime_type = true,
+    log_attachment_hash = true,
     error_retransmits = 3,
     hash_retransmits = 7,
     submission_info_retransmits = 7,
@@ -47,7 +49,7 @@ local function yomi_config(opts)
     scan_image_mime = false,
     virus_score = 0.7,
     suspicious_score = 0.4,
-    skip_mime_types = {}, -- file types to skip, e.g. { "pdf", "epub" }
+    skip_mime_types = {},
     clean_weight = -0.5,
     suspicious_weight = 2,
     virus_weight = 5,
@@ -84,48 +86,6 @@ local function log_message(info_level, message, task)
     rspamd_logger.infox(task, message)
   else
     rspamd_logger.debugm(N, task, message)
-  end
-end
-
-local function handle_yomi_result(result, task, rule, digest)
-  local score = result['score']
-  local malware_description = result['description']
-  rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
-
-  if score then
-    local symbol = ''
-    local weight = 0
-    local description = ''
-    -- a file is a virus if the score is greater than virus_score
-    if score > rule.virus_score then
-      symbol = 'YOMI_VIRUS'
-      weight = rule.virus_weight
-      description = string.format('Virus found: %s, score: %s', malware_description, score)
-      task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-    elseif score > rule.suspicious_score then
-      symbol = 'YOMI_SUSPICIOUS'
-      weight = rule.suspicious_weight
-      description = string.format('Suspicious file found: %s, score: %s', malware_description, score)
-      task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-    elseif score < 0 then
-      symbol = 'YOMI_UNKNOWN'
-      weight = 0
-      description = "Unable to compute a score: " .. malware_description
-      task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-    else
-      symbol = 'YOMI_CLEAN'
-      weight = rule.clean_weight
-      description = string.format('File is clean: %s, score: %s', malware_description, score)
-      task:insert_result(true, symbol, weight, description)
-      log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
-    end
-
-    local cache_entry = { symbol, weight, description }
-    rspamd_logger.debugm(N, task, '%s: saving to cache %s', rule.log_prefix, cache_entry)
-    common.save_cache(task, digest, rule, cache_entry, 0.0)
   end
 end
 
@@ -173,10 +133,10 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
   return false
 end
 
-local function should_skip_mime(detected_type, task, rule)
+local function should_skip_mime(detected_type, file_name, task, rule)
   if rule.skip_mime_types[detected_type] then
     log_message(rule.log_not_submitted,
-        string.format('%s: file not submitted because of its MIME type: %s', rule.log_prefix, detected_type), task)
+        string.format('%s: attachment %s not submitted because has MIME type: %s', rule.log_prefix, file_name, detected_type), task)
     return true
   else
     return false
@@ -217,6 +177,7 @@ local function get_attachment_info(task, content, rule)
         local mime_type = get_mime_type(task, content, rule)
         attachment_info['file_name'] = file_name
         attachment_info['detected_type'] = mime_type
+        attachment_info['size'] = mime_part:get_length()
       end
     end
   end
@@ -246,10 +207,14 @@ local function yomi_check(task, content, digest, rule)
       return
     end
 
+    local file_name = attachment_info['file_name']
     local detected_type = attachment_info['detected_type']
+    local file_size = attachment_info['size']
 
-    if should_skip_mime(detected_type, task, rule) then
-      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('MIME type to skip: %s', detected_type))
+    log_message(rule.log_attachment_mime_type, string.format('%s: attachment %s: MIME type %s, size: %s bytes', rule.log_prefix, file_name, detected_type, file_size), task)
+
+    if should_skip_mime(detected_type, file_name, task, rule) then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('%s has MIME type to skip: %s', file_name, detected_type))
       return
     end
 
@@ -260,6 +225,8 @@ local function yomi_check(task, content, digest, rule)
     local hash = rspamd_cryptobox_hash.create_specific('sha256')
     hash:update(content)
     hash = hash:hex()
+
+    log_message(rule.log_attachment_hash, string.format('%s: attachment %s has hash %s', rule.log_prefix, file_name, hash), task)
 
     local url = string.format('%s/hash/%s', rule.url, hash)
     rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
@@ -272,6 +239,48 @@ local function yomi_check(task, content, digest, rule)
         ['Authorization'] = auth
       },
     }
+
+    local function handle_yomi_result(result, task, rule, digest)
+      local score = result['score']
+      local malware_description = result['description']
+      rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
+
+      if score then
+        local symbol = ''
+        local weight = 0
+        local description = ''
+        -- a file is a virus if the score is greater than virus_score
+        if score > rule.virus_score then
+          symbol = 'YOMI_VIRUS'
+          weight = rule.virus_weight
+          description = string.format('%s is dangerous: %s, score: %s', file_name, malware_description, score)
+          task:insert_result(true, symbol, weight, description)
+          log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+        elseif score > rule.suspicious_score then
+          symbol = 'YOMI_SUSPICIOUS'
+          weight = rule.suspicious_weight
+          description = string.format('%s is suspicious: %s, score: %s', file_name, malware_description, score)
+          task:insert_result(true, symbol, weight, description)
+          log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+        elseif score < 0 then
+          symbol = 'YOMI_UNKNOWN'
+          weight = 0
+          description = string.format('Unable to compute a score for %s: %s', file_name, malware_description)
+          task:insert_result(true, symbol, weight, description)
+          log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+        else
+          symbol = 'YOMI_CLEAN'
+          weight = rule.clean_weight
+          description = string.format('%s is clean, score: %s', file_name, score)
+          task:insert_result(true, symbol, weight, description)
+          log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
+        end
+
+        local cache_entry = { symbol, weight, description }
+        rspamd_logger.debugm(N, task, '%s: saving to cache %s', rule.log_prefix, cache_entry)
+        common.save_cache(task, digest, rule, cache_entry, 0.0)
+      end
+    end
 
     local function should_retransmit(http_code)
       if error_retransmits > 0 then
