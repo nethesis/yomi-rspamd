@@ -32,6 +32,8 @@ local function yomi_config(opts)
     log_not_submitted = false,
     log_http_return_code = false,
     log_submission_state = false,
+    log_attachment_mime_type = true,
+    log_attachment_hash = true,
     error_retransmits = 3,
     hash_retransmits = 7,
     submission_info_retransmits = 7,
@@ -44,15 +46,13 @@ local function yomi_config(opts)
     action = false,
     scan_mime_parts = true,
     scan_text_mime = false,
-    scan_image_mime = false,
+    scan_image_mime = true,
     virus_score = 0.7,
     suspicious_score = 0.4,
-    skip_mime_types = {}, -- file types to skip, e.g. { "pdf", "epub" }
-    clean_weight = -0.5,
-    suspicious_weight = 2,
-    virus_weight = 5,
+    mime_type_graylist = {}, -- mime types to scan, e.g. {"application/zip", "image/jpeg"}
     cache_expire = 7200, -- expire redis in 2h
     tmpdir = '/tmp',
+    weight_correction = -1,
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -70,7 +70,7 @@ local function yomi_config(opts)
     end
   end
 
-  default_conf.skip_mime_types = Set(default_conf.skip_mime_types)
+  default_conf.mime_type_graylist = Set(default_conf.mime_type_graylist)
   lua_util.add_debug_alias('external_services', default_conf.name)
   return default_conf
 end
@@ -87,7 +87,7 @@ local function log_message(info_level, message, task)
   end
 end
 
-local function handle_yomi_result(result, task, rule, digest)
+local function handle_yomi_result(result, task, rule, digest, file_name)
   local score = result['score']
   local malware_description = result['description']
   rspamd_logger.debugm(N, task, '%s: Yomi response score: %s, description: %s', rule.log_prefix, score, malware_description)
@@ -99,26 +99,26 @@ local function handle_yomi_result(result, task, rule, digest)
     -- a file is a virus if the score is greater than virus_score
     if score > rule.virus_score then
       symbol = 'YOMI_VIRUS'
-      weight = rule.virus_weight
-      description = string.format('Virus found: %s, score: %s', malware_description, score)
+      weight = score * 10 + rule.weight_correction
+      description = string.format('%s is dangerous: %s, score: %s', file_name, malware_description, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     elseif score > rule.suspicious_score then
       symbol = 'YOMI_SUSPICIOUS'
-      weight = rule.suspicious_weight
-      description = string.format('Suspicious file found: %s, score: %s', malware_description, score)
+      weight = score * 10 + rule.weight_correction
+      description = string.format('%s is suspicious: %s, score: %s', file_name, malware_description, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     elseif score < 0 then
       symbol = 'YOMI_UNKNOWN'
       weight = 0
-      description = "Unable to compute a score: " .. malware_description
+      description = string.format('Unable to compute a score for %s: %s', file_name, malware_description)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     else
       symbol = 'YOMI_CLEAN'
-      weight = rule.clean_weight
-      description = string.format('File is clean: %s, score: %s', malware_description, score)
+      weight = score * 10 + rule.weight_correction
+      description = string.format('%s is clean, score: %s', file_name, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     end
@@ -173,10 +173,10 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
   return false
 end
 
-local function should_skip_mime(detected_type, task, rule)
-  if rule.skip_mime_types[detected_type] then
+local function should_skip_mime(detected_type, file_name, task, rule)
+  if not rule.mime_type_graylist[detected_type] then
     log_message(rule.log_not_submitted,
-        string.format('%s: file not submitted because of its MIME type: %s', rule.log_prefix, detected_type), task)
+        string.format('%s: attachment %s not submitted because has MIME type: %s', rule.log_prefix, file_name, detected_type), task)
     return true
   else
     return false
@@ -217,6 +217,7 @@ local function get_attachment_info(task, content, rule)
         local mime_type = get_mime_type(task, content, rule)
         attachment_info['file_name'] = file_name
         attachment_info['detected_type'] = mime_type
+        attachment_info['size'] = mime_part:get_length()
       end
     end
   end
@@ -246,10 +247,14 @@ local function yomi_check(task, content, digest, rule)
       return
     end
 
+    local file_name = attachment_info['file_name']
     local detected_type = attachment_info['detected_type']
+    local file_size = attachment_info['size']
 
-    if should_skip_mime(detected_type, task, rule) then
-      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('MIME type to skip: %s', detected_type))
+    log_message(rule.log_attachment_mime_type, string.format('%s: attachment %s: MIME type %s, size: %s bytes', rule.log_prefix, file_name, detected_type, file_size), task)
+
+    if should_skip_mime(detected_type, file_name, task, rule) then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('%s has MIME type to skip: %s', file_name, detected_type))
       return
     end
 
@@ -260,6 +265,8 @@ local function yomi_check(task, content, digest, rule)
     local hash = rspamd_cryptobox_hash.create_specific('sha256')
     hash:update(content)
     hash = hash:hex()
+
+    log_message(rule.log_attachment_hash, string.format('%s: attachment %s has hash %s', rule.log_prefix, file_name, hash), task)
 
     local url = string.format('%s/hash/%s', rule.url, hash)
     rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
@@ -281,7 +288,7 @@ local function yomi_check(task, content, digest, rule)
       else
         symbol = 'YOMI_UNKNOWN'
         weight = 0
-        description = string.format('Maximum error retransmits exceeded (HTTP %s)', http_code)
+        description = string.format('Maximum error retransmits exceeded for %s (HTTP %s)', file_name, http_code)
         task:insert_result(true, symbol, weight, description)
         log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
       end
@@ -295,8 +302,9 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_hash_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum hash retransmits exceeded')
-        common.yield_result(task, rule, 'Maximum hash retransmits exceeded', 0.0, 'fail')
+        description = string.format('Maximum hash retransmits exceeded for %s', file_name)
+        task:insert_result(true, 'YOMI_WAIT', 1, description)
+        common.yield_result(task, rule, description, 0.0, 'fail')
       end
       
       return false
@@ -308,15 +316,16 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_submission_info_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum sumbission info retransmits exceeded')
-        common.yield_result(task, rule, 'Maximum sumbission info retransmits exceeded', 0.0, 'fail')
+        description = string.format('Maximum sumbission info retransmits exceeded for %s', file_name)
+        task:insert_result(true, 'YOMI_WAIT', 1, description)
+        common.yield_result(task, rule, description, 0.0, 'fail')
       end
 
       return false
     end
 
     local function yomi_upload(task, content, hash, auth, rule)
-      rspamd_logger.debugm(N, task, '%s: uploading to sandbox', rule.log_prefix)
+      rspamd_logger.debugm(N, task, '%s: uploading to sandbox %s', rule.log_prefix, file_name)
 
       local request_data = {
         task = task,
@@ -341,8 +350,9 @@ local function yomi_check(task, content, digest, rule)
           log_message(rule.log_http_return_code, string.format('%s: upload returned %s (hash: %s)', rule.log_prefix, code, hash), task)
     
           if code == 202 then
-            task:insert_result(true, 'YOMI_WAIT', 1, 'File uploaded')
-            common.yield_result(task, rule, 'File uploaded', 0.0, 'fail')
+            description = string.format('File uploaded: %s', file_name)
+            task:insert_result(true, 'YOMI_WAIT', 1, description)
+            common.yield_result(task, rule, description, 0.0, 'fail')
           elseif code == 401 or code == 403 then
             task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
           elseif code == 200 then
@@ -351,7 +361,7 @@ local function yomi_check(task, content, digest, rule)
     
             if res then
               local obj = parser:get_object()
-              handle_yomi_result(obj, task, rule, digest)
+              handle_yomi_result(obj, task, rule, digest, file_name)
             else
               -- not res
               rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
@@ -414,10 +424,11 @@ local function yomi_check(task, content, digest, rule)
                 end
               elseif state == 'WAITING' then
                 -- analysis in progress
-                task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
-                common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
+                description = string.format('Analysis in progress for %s', file_name)
+                task:insert_result(true, 'YOMI_WAIT', 1, description)
+                common.yield_result(task, rule, description, 0.0, 'fail')
               else
-                rspamd_logger.errx(task, '%s: Unexpected submission state: %s', rule.log_prefix, state)
+                rspamd_logger.errx(task, '%s: Unexpected submission state %s for %s', rule.log_prefix, state, file_name)
 
                 if should_retransmit(code) then
                   yomi_submission_info(task, submission_id)
@@ -437,7 +448,7 @@ local function yomi_check(task, content, digest, rule)
 
             if res then
               local obj = parser:get_object()
-              handle_yomi_result(obj, task, rule, digest)
+              handle_yomi_result(obj, task, rule, digest, file_name)
             else
               -- not res
               rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
@@ -491,8 +502,9 @@ local function yomi_check(task, content, digest, rule)
 
               if state and state == 'WAITING' then
                 -- analysis in progress
-                task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
-                common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
+                description = string.format('File analysis in progress for %s', file_name)
+                task:insert_result(true, 'YOMI_WAIT', 1, description)
+                common.yield_result(task, rule, description, 0.0, 'fail')
               else
                 -- hash should be ready in a moment
                 if should_retransmit_hash() then
@@ -514,7 +526,7 @@ local function yomi_check(task, content, digest, rule)
 
           if res then
             local obj = parser:get_object()
-            handle_yomi_result(obj, task, rule, digest)
+            handle_yomi_result(obj, task, rule, digest, file_name)
           else
             -- not res
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
