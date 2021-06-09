@@ -46,10 +46,10 @@ local function yomi_config(opts)
     action = false,
     scan_mime_parts = true,
     scan_text_mime = false,
-    scan_image_mime = false,
+    scan_image_mime = true,
     virus_score = 0.7,
     suspicious_score = 0.4,
-    mime_type_graylist = {},
+    mime_type_graylist = {}, -- mime types to scan, e.g. {"application/zip", "image/jpeg"}
     cache_expire = 7200, -- expire redis in 2h
     tmpdir = '/tmp',
     weight_correction = -1,
@@ -288,7 +288,7 @@ local function yomi_check(task, content, digest, rule)
       else
         symbol = 'YOMI_UNKNOWN'
         weight = 0
-        description = string.format('Maximum error retransmits exceeded (HTTP %s)', http_code)
+        description = string.format('Maximum error retransmits exceeded for %s (HTTP %s)', file_name, http_code)
         task:insert_result(true, symbol, weight, description)
         log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
       end
@@ -302,8 +302,9 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_hash_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum hash retransmits exceeded')
-        common.yield_result(task, rule, 'Maximum hash retransmits exceeded', 0.0, 'fail')
+        description = string.format('Maximum hash retransmits exceeded for %s', file_name)
+        task:insert_result(true, 'YOMI_WAIT', 1, description)
+        common.yield_result(task, rule, description, 0.0, 'fail')
       end
       
       return false
@@ -315,15 +316,16 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_submission_info_delay)
         return true
       else
-        task:insert_result(true, 'YOMI_WAIT', 1, 'Maximum sumbission info retransmits exceeded')
-        common.yield_result(task, rule, 'Maximum sumbission info retransmits exceeded', 0.0, 'fail')
+        description = string.format('Maximum sumbission info retransmits exceeded for %s', file_name)
+        task:insert_result(true, 'YOMI_WAIT', 1, description)
+        common.yield_result(task, rule, description, 0.0, 'fail')
       end
 
       return false
     end
 
     local function yomi_upload(task, content, hash, auth, rule)
-      rspamd_logger.debugm(N, task, '%s: uploading to sandbox', rule.log_prefix)
+      rspamd_logger.debugm(N, task, '%s: uploading to sandbox %s', rule.log_prefix, file_name)
 
       local request_data = {
         task = task,
@@ -348,8 +350,9 @@ local function yomi_check(task, content, digest, rule)
           log_message(rule.log_http_return_code, string.format('%s: upload returned %s (hash: %s)', rule.log_prefix, code, hash), task)
     
           if code == 202 then
-            task:insert_result(true, 'YOMI_WAIT', 1, 'File uploaded')
-            common.yield_result(task, rule, 'File uploaded', 0.0, 'fail')
+            description = string.format('File uploaded: %s', file_name)
+            task:insert_result(true, 'YOMI_WAIT', 1, description)
+            common.yield_result(task, rule, description, 0.0, 'fail')
           elseif code == 401 or code == 403 then
             task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
           elseif code == 200 then
@@ -421,10 +424,11 @@ local function yomi_check(task, content, digest, rule)
                 end
               elseif state == 'WAITING' then
                 -- analysis in progress
-                task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
-                common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
+                description = string.format('Analysis in progress for %s', file_name)
+                task:insert_result(true, 'YOMI_WAIT', 1, description)
+                common.yield_result(task, rule, description, 0.0, 'fail')
               else
-                rspamd_logger.errx(task, '%s: Unexpected submission state: %s', rule.log_prefix, state)
+                rspamd_logger.errx(task, '%s: Unexpected submission state %s for %s', rule.log_prefix, state, file_name)
 
                 if should_retransmit(code) then
                   yomi_submission_info(task, submission_id)
@@ -498,8 +502,9 @@ local function yomi_check(task, content, digest, rule)
 
               if state and state == 'WAITING' then
                 -- analysis in progress
-                task:insert_result(true, 'YOMI_WAIT', 1, 'File analysis in progress')
-                common.yield_result(task, rule, 'File analysis in progress', 0.0, 'fail')
+                description = string.format('File analysis in progress for %s', file_name)
+                task:insert_result(true, 'YOMI_WAIT', 1, description)
+                common.yield_result(task, rule, description, 0.0, 'fail')
               else
                 -- hash should be ready in a moment
                 if should_retransmit_hash() then
