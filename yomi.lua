@@ -49,12 +49,10 @@ local function yomi_config(opts)
     scan_image_mime = false,
     virus_score = 0.7,
     suspicious_score = 0.4,
-    skip_mime_types = {},
-    clean_weight = -0.5,
-    suspicious_weight = 2,
-    virus_weight = 5,
+    mime_type_graylist = {},
     cache_expire = 7200, -- expire redis in 2h
     tmpdir = '/tmp',
+    weight_correction = -1,
   }
 
   default_conf = lua_util.override_defaults(default_conf, opts)
@@ -72,7 +70,7 @@ local function yomi_config(opts)
     end
   end
 
-  default_conf.skip_mime_types = Set(default_conf.skip_mime_types)
+  default_conf.mime_type_graylist = Set(default_conf.mime_type_graylist)
   lua_util.add_debug_alias('external_services', default_conf.name)
   return default_conf
 end
@@ -101,13 +99,13 @@ local function handle_yomi_result(result, task, rule, digest, file_name)
     -- a file is a virus if the score is greater than virus_score
     if score > rule.virus_score then
       symbol = 'YOMI_VIRUS'
-      weight = rule.virus_weight
+      weight = score * 10 + rule.weight_correction
       description = string.format('%s is dangerous: %s, score: %s', file_name, malware_description, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_virus, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     elseif score > rule.suspicious_score then
       symbol = 'YOMI_SUSPICIOUS'
-      weight = rule.suspicious_weight
+      weight = score * 10 + rule.weight_correction
       description = string.format('%s is suspicious: %s, score: %s', file_name, malware_description, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_suspicious, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
@@ -119,7 +117,7 @@ local function handle_yomi_result(result, task, rule, digest, file_name)
       log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
     else
       symbol = 'YOMI_CLEAN'
-      weight = rule.clean_weight
+      weight = score * 10 + rule.weight_correction
       description = string.format('%s is clean, score: %s', file_name, score)
       task:insert_result(true, symbol, weight, description)
       log_message(rule.log_clean, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
@@ -176,7 +174,7 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
 end
 
 local function should_skip_mime(detected_type, file_name, task, rule)
-  if rule.skip_mime_types[detected_type] then
+  if not rule.mime_type_graylist[detected_type] then
     log_message(rule.log_not_submitted,
         string.format('%s: attachment %s not submitted because has MIME type: %s', rule.log_prefix, file_name, detected_type), task)
     return true
