@@ -224,6 +224,25 @@ local function get_attachment_info(task, content, rule)
   return attachment_info
 end
 
+local hash_http_callback
+
+local function request_hash(task, rule, hash, auth)
+  local url = string.format('%s/hash/%s', rule.url, hash)
+  rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
+
+  local request_data = {
+    task = task,
+    url = url,
+    timeout = rule.timeout,
+    headers = {
+      ['Authorization'] = auth
+    },
+  }
+
+  request_data.callback = hash_http_callback
+  http.request(request_data)
+end
+
 local function yomi_check(task, content, digest, rule)
   local hash_retransmits = rule.hash_retransmits
   local error_retransmits = rule.error_retransmits
@@ -267,18 +286,6 @@ local function yomi_check(task, content, digest, rule)
     hash = hash:hex()
 
     log_message(rule.log_attachment_hash, string.format('%s: attachment %s has hash %s', rule.log_prefix, file_name, hash), task)
-
-    local url = string.format('%s/hash/%s', rule.url, hash)
-    rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
-
-    local request_data = {
-      task = task,
-      url = url,
-      timeout = rule.timeout,
-      headers = {
-        ['Authorization'] = auth
-      },
-    }
 
     local function should_retransmit(http_code)
       if error_retransmits > 0 then
@@ -471,12 +478,12 @@ local function yomi_check(task, content, digest, rule)
       http.request(request_data)
     end
 
-    local function hash_http_callback(http_err, code, body, headers)
+    hash_http_callback = function(http_err, code, body, headers)
       if http_err then
         rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
         
         if should_retransmit(code) then
-          yomi_check_uncached()
+          request_hash(task, rule, hash, auth)
         end
       else
         log_message(rule.log_http_return_code, string.format('%s: hash returned %s (hash: %s)', rule.log_prefix, code, hash), task)
@@ -508,7 +515,7 @@ local function yomi_check(task, content, digest, rule)
               else
                 -- hash should be ready in a moment
                 if should_retransmit_hash() then
-                  yomi_check_uncached()
+                  request_hash(task, rule, hash, auth)
                 end
               end
             end
@@ -517,7 +524,7 @@ local function yomi_check(task, content, digest, rule)
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
 
             if should_retransmit(code) then
-              yomi_check_uncached()
+              request_hash(task, rule, hash, auth)
             end
           end
         elseif code == 200 then
@@ -532,21 +539,20 @@ local function yomi_check(task, content, digest, rule)
             rspamd_logger.errx(task, '%s: invalid response', rule.log_prefix)
             
             if should_retransmit(code) then
-              yomi_check_uncached()
+              request_hash(task, rule, hash, auth)
             end
           end
         else
           rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
           
           if should_retransmit(code) then
-            yomi_check_uncached()
+            request_hash(task, rule, hash, auth)
           end
         end
       end
     end
 
-    request_data.callback = hash_http_callback
-    http.request(request_data)
+    request_hash(task, rule, hash, auth)
   end
 
   if condition_check_and_continue(task, content, rule, digest, yomi_check_uncached) then
