@@ -224,25 +224,6 @@ local function get_attachment_info(task, content, rule)
   return attachment_info
 end
 
-local hash_http_callback
-
-local function request_hash(task, rule, hash, auth)
-  local url = string.format('%s/hash/%s', rule.url, hash)
-  rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
-
-  local request_data = {
-    task = task,
-    url = url,
-    timeout = rule.timeout,
-    headers = {
-      ['Authorization'] = auth
-    },
-  }
-
-  request_data.callback = hash_http_callback
-  http.request(request_data)
-end
-
 local function yomi_check(task, content, digest, rule)
   local hash_retransmits = rule.hash_retransmits
   local error_retransmits = rule.error_retransmits
@@ -411,7 +392,7 @@ local function yomi_check(task, content, digest, rule)
             yomi_submission_info(task, submission_id)
           end
         else
-          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (submission_id: %s, hash: %s)', rule.log_prefix, code, submission_id, hash), task)
+          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (hash: %s, submission_id: %s)', rule.log_prefix, code, hash, submission_id), task)
 
           if code == 401 or code == 403 then
             task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
@@ -477,6 +458,8 @@ local function yomi_check(task, content, digest, rule)
       request_data.callback = submission_info_http_callback
       http.request(request_data)
     end
+
+    local request_hash
 
     hash_http_callback = function(http_err, code, body, headers)
       if http_err then
@@ -550,6 +533,23 @@ local function yomi_check(task, content, digest, rule)
           end
         end
       end
+    end
+
+    request_hash = function(task, rule, hash, auth)
+      local url = string.format('%s/hash/%s', rule.url, hash)
+      rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
+
+      local request_data = {
+        task = task,
+        url = url,
+        timeout = rule.timeout,
+        headers = {
+          ['Authorization'] = auth
+        },
+      }
+
+      request_data.callback = hash_http_callback
+      http.request(request_data)
     end
 
     request_hash(task, rule, hash, auth)
