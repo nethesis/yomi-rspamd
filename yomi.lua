@@ -251,8 +251,6 @@ local function yomi_check(task, content, digest, rule)
     local detected_type = attachment_info['detected_type']
     local file_size = attachment_info['size']
 
-    log_message(rule.log_attachment_mime_type, string.format('%s: attachment %s: MIME type %s, size: %s bytes', rule.log_prefix, file_name, detected_type, file_size), task)
-
     if should_skip_mime(detected_type, file_name, task, rule) then
       task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('%s has MIME type to skip: %s', file_name, detected_type))
       return
@@ -265,8 +263,6 @@ local function yomi_check(task, content, digest, rule)
     local hash = rspamd_cryptobox_hash.create_specific('sha256')
     hash:update(content)
     hash = hash:hex()
-
-    log_message(rule.log_attachment_hash, string.format('%s: attachment %s has hash %s', rule.log_prefix, file_name, hash), task)
 
     local url = string.format('%s/hash/%s', rule.url, hash)
     rspamd_logger.debugm(N, task, '%s: sending request %s', rule.log_prefix, url)
@@ -479,7 +475,7 @@ local function yomi_check(task, content, digest, rule)
           yomi_check_uncached()
         end
       else
-        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (hash: %s)', rule.log_prefix, code, hash), task)
+        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (file_name: %s, MIME type: %s, hash: %s, size: %s)', rule.log_prefix, code, file_name, detected_type, hash, file_size), task)
 
         if code == 404 then
           rspamd_logger.debugm(N, task, '%s: hash %s not found', rule.log_prefix, hash)
