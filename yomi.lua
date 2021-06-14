@@ -400,7 +400,7 @@ local function yomi_check(task, content, digest, rule)
             yomi_submission_info(task, submission_id)
           end
         else
-          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (submission_id: %s, hash: %s)', rule.log_prefix, code, submission_id, hash), task)
+          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (hash: %s, submission_id: %s)', rule.log_prefix, code, hash, submission_id), task)
 
           if code == 401 or code == 403 then
             task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
@@ -475,7 +475,7 @@ local function yomi_check(task, content, digest, rule)
           yomi_check_uncached()
         end
       else
-        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (file_name: %s, MIME type: %s, hash: %s, size: %s)', rule.log_prefix, code, file_name, detected_type, hash, file_size), task)
+        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (attachment: %s, MIME type: %s, hash: %s, size: %s)', rule.log_prefix, code, file_name, detected_type, hash, file_size), task)
 
         if code == 404 then
           rspamd_logger.debugm(N, task, '%s: hash %s not found', rule.log_prefix, hash)
