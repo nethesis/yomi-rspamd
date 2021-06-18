@@ -129,6 +129,17 @@ local function handle_yomi_result(result, task, rule, digest, file_name)
   end
 end
 
+local function message_not_too_large(task, content, rule)
+  local max_size = tonumber(rule.max_size)
+  if not max_size then return true end
+  if #content > max_size then
+    rspamd_logger.infox(task, "skip %s check as it is too large: %s (%s is allowed)",
+        rule.log_prefix, #content, max_size)
+    return false
+  end
+  return true
+end
+
 local function condition_check_and_continue(task, content, rule, digest, fn)
   local uncached = true
   local key = digest
@@ -151,7 +162,9 @@ local function condition_check_and_continue(task, content, rule, digest, fn)
       end
     end
 
-    if uncached then
+    local f_message_not_too_large = message_not_too_large(task, content, rule)
+
+    if uncached and f_message_not_too_large then
       fn()
     end
   end
