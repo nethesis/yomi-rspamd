@@ -1,26 +1,26 @@
 # INTRO
 
-YOMI RSPAMD it's a lua plugin that, in combination with <a href="https://github.com/nethesis/yomi-proxy">yomi-proxy</a>, permit to analize every mail attachment sent from rspamd to <a href="https://yoroi.company">yoroi sandbox (YOMI)</a>.
-Before install this package, you has to install <a href="https://github.com/nethesis/yomi-proxy">yomi-proxy</a>.
+This is lua plugin for Rspamd that, in combination with <a href="https://github.com/nethesis/yomi-proxy">yomi-proxy</a>, analizes every mail attachment through the <a href="https://yoroi.company">Yoroi Yomi sandbox (YOMI)</a>.
+Before installing this package, you have to install the <a href="https://github.com/nethesis/yomi-proxy">yomi-proxy</a>.
 
 # PREREQUISITE
 
-- rspamd
+- Rspamd
 
 # INSTALLATION
 
-Clone this repository on your local server:
+Clone this repository to your local server:
 ```
 git clone https://github.com/nethesis/yomi-rspamd
 ```
 
-Copy yomi.lua file on directory :
+Copy yomi.lua file to Rspamd plugins directory :
 
 ```
 cp yomi.lua /usr/share/rspamd/lualib/lua_scanners/
 ```
 
-Add the below line inside  `/usr/share/rspamd/lualib/lua_scanners/init.lua` under the `---Antiviruses` section:
+Add the line below inside  `/usr/share/rspamd/lualib/lua_scanners/init.lua` under the `---Antiviruses` section:
 ```
 require_scanner('yomi')
 ```
@@ -28,14 +28,14 @@ require_scanner('yomi')
 # CONFIGURE
 
 
-Enable yomi scanner  inside rspamd `/etc/rspamd/local.d/antivirus.conf`:
+Enable yomi scanner inside rspamd `/etc/rspamd/local.d/antivirus.conf`:
 
 ```
 enabled = true
 
 yomi {
   type = "yomi";
-  url = "https://sb.nethesis.it";
+  url = "https://<yomi-proxy>.nethesis.it";
   virus_score = 0.8;
   suspicious_score = 0.4;
   system_id = "my_system_id";
