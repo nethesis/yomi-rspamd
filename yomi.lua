@@ -129,12 +129,56 @@ local function handle_yomi_result(result, task, rule, digest, file_name)
   end
 end
 
+local function get_mime_type(task, content, rule)
+  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, rspamd_util.random_hex(32))
+
+  local attachment_fd = rspamd_util.create_file(attachment_filename)
+  content:save_in_file(attachment_fd)
+
+  local handle = io.popen(string.format('/usr/bin/file -b --mime-type \'%s\'', attachment_filename))
+  local result = handle:read("*a")
+  local mime_type = string.gsub(result, "\n", "")
+  handle:close()
+
+  task:get_mempool():add_destructor(function()
+    rspamd_util.close_file(attachment_fd)
+    os.remove(attachment_filename)
+  end)
+
+  return mime_type
+end
+
+local function get_attachment_info(task, content, rule)
+  local attachment_info = {}
+  local mime_parts = task:get_parts() or {}
+
+  for _, mime_part in ipairs(mime_parts) do
+    local string_content = tostring(content)
+    local string_part_content = tostring(mime_part:get_content())
+
+    if string_content == string_part_content then
+      local file_name = mime_part:get_filename()
+
+      if file_name ~= nil then
+        local mime_type = get_mime_type(task, content, rule)
+        attachment_info['file_name'] = file_name
+        attachment_info['detected_type'] = mime_type
+        attachment_info['size'] = mime_part:get_length()
+      end
+    end
+  end
+  return attachment_info
+end
+
 local function message_not_too_large(task, content, rule)
   local max_size = tonumber(rule.max_size)
   if not max_size then return true end
   if #content > max_size then
-    rspamd_logger.infox(task, "skip %s check as it is too large: %s (%s is allowed)",
-        rule.log_prefix, #content, max_size)
+    local attachment_info = get_attachment_info(task, content, rule)
+    local file_name = attachment_info['file_name']
+
+    rspamd_logger.infox(task, "skip %s check for %s as it is too large: %s (%s is allowed)",
+        rule.log_prefix, file_name, #content, max_size)
     return false
   end
   return true
@@ -194,47 +238,6 @@ local function should_skip_mime(detected_type, file_name, task, rule)
   else
     return false
   end
-end
-
-local function get_mime_type(task, content, rule)
-  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, rspamd_util.random_hex(32))
-
-  local attachment_fd = rspamd_util.create_file(attachment_filename)
-  content:save_in_file(attachment_fd)
-
-  local handle = io.popen(string.format('/usr/bin/file -b --mime-type \'%s\'', attachment_filename))
-  local result = handle:read("*a")
-  local mime_type = string.gsub(result, "\n", "")
-  handle:close()
-
-  task:get_mempool():add_destructor(function()
-    rspamd_util.close_file(attachment_fd)
-    os.remove(attachment_filename)
-  end)
-
-  return mime_type
-end
-
-local function get_attachment_info(task, content, rule)
-  local attachment_info = {}
-  local mime_parts = task:get_parts() or {}
-
-  for _, mime_part in ipairs(mime_parts) do
-    local string_content = tostring(content)
-    local string_part_content = tostring(mime_part:get_content())
-
-    if string_content == string_part_content then
-      local file_name = mime_part:get_filename()
-
-      if file_name ~= nil then
-        local mime_type = get_mime_type(task, content, rule)
-        attachment_info['file_name'] = file_name
-        attachment_info['detected_type'] = mime_type
-        attachment_info['size'] = mime_part:get_length()
-      end
-    end
-  end
-  return attachment_info
 end
 
 local function yomi_check(task, content, digest, rule)
