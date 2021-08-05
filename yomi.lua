@@ -129,6 +129,26 @@ local function handle_yomi_result(result, task, rule, digest, file_name)
   end
 end
 
+local function is_pec_signature(task, content, rule)
+  local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, rspamd_util.random_hex(32))
+
+  local attachment_fd = rspamd_util.create_file(attachment_filename)
+  content:save_in_file(attachment_fd)
+
+  local return_code = os.execute(string.format('/usr/bin/openssl pkcs7 -in \'%s\' -inform DER -noout', attachment_filename))
+  -- Lua 5.1 returns a return code multiplied by 256
+  return_code = return_code / 256
+
+  rspamd_logger.infox(task, "openssl result: %s", return_code) -- //// delete
+
+  task:get_mempool():add_destructor(function()
+    rspamd_util.close_file(attachment_fd)
+    os.remove(attachment_filename)
+  end)
+
+  return return_code == 0
+end
+
 local function get_mime_type(task, content, rule)
   local attachment_filename = string.format('%s/%s.tmp', rule.tmpdir, rspamd_util.random_hex(32))
 
@@ -269,6 +289,12 @@ local function yomi_check(task, content, digest, rule)
 
     if should_skip_mime(detected_type, file_name, task, rule) then
       task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('%s has MIME type to skip: %s', file_name, detected_type))
+      return
+    end
+
+    -- skip attachment if it's a valid PEC signature
+    if detected_type == 'application/octet-stream' and is_pec_signature(task, content, rule) then
+      task:insert_result(true, 'YOMI_SKIPPED', 0, string.format('%s contains PEC signature', file_name))
       return
     end
 
