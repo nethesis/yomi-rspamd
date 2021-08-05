@@ -139,8 +139,6 @@ local function is_pec_signature(task, content, rule)
   -- Lua 5.1 returns a return code multiplied by 256
   return_code = return_code / 256
 
-  rspamd_logger.infox(task, "openssl result: %s", return_code) -- //// delete
-
   task:get_mempool():add_destructor(function()
     rspamd_util.close_file(attachment_fd)
     os.remove(attachment_filename)
