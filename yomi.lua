@@ -338,9 +338,11 @@ local function yomi_check(task, content, digest, rule)
         sleep(rule.retransmit_hash_delay)
         return true
       else
-        description = string.format('Maximum hash retransmits exceeded for %s', file_name)
-        task:insert_result(true, 'YOMI_WAIT', 1, description)
-        common.yield_result(task, rule, description, 0.0, 'fail')
+        symbol = 'YOMI_UNKNOWN'
+        weight = 0
+        description = string.format('Maximum hash retransmits exceeded for %s, presuming attachment is clean', file_name)
+        task:insert_result(true, symbol, weight, description)
+        log_message(rule.log_unknown, string.format('%s: %s (%s weight: %s)', rule.log_prefix, description, symbol, weight), task)
       end
       
       return false
@@ -377,13 +379,13 @@ local function yomi_check(task, content, digest, rule)
     
       local function upload_http_callback(http_err, code, body, headers)
         if http_err then
-          rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
+          rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s, hash: %s', rule.log_prefix, http_err, body, headers, hash)
           
           if should_retransmit(code) then
             yomi_upload(task, content, hash, auth, rule)
           end
         else
-          log_message(rule.log_http_return_code, string.format('%s: upload returned %s (hash: %s)', rule.log_prefix, code, hash), task)
+          log_message(rule.log_http_return_code, string.format('%s: upload returned %s (hash: %s, body: %s)', rule.log_prefix, code, hash, body), task)
     
           if code == 202 then
             description = string.format('File uploaded: %s', file_name)
@@ -407,7 +409,7 @@ local function yomi_check(task, content, digest, rule)
               end
             end
           else
-            rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
+            rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s, hash: %s', rule.log_prefix, code, body, headers, hash)
             
             if should_retransmit(code) then
               yomi_upload(task, content, hash, auth, rule)
@@ -434,13 +436,13 @@ local function yomi_check(task, content, digest, rule)
 
       local function submission_info_http_callback(http_err, code, body, headers)
         if http_err then
-          rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
+          rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s, submission_id: %s, hash: %s', rule.log_prefix, http_err, body, headers, submission_id, hash)
 
           if should_retransmit(code) then
             yomi_submission_info(task, submission_id)
           end
         else
-          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (hash: %s, submission_id: %s)', rule.log_prefix, code, hash, submission_id), task)
+          log_message(rule.log_http_return_code, string.format('%s: submission info returned %s (hash: %s, submission_id: %s, body: %s)', rule.log_prefix, code, hash, submission_id, body), task)
 
           if code == 401 or code == 403 then
             task:insert_result(true, 'YOMI_UNAUTHORIZED', 1, 'Unauthorized request returned ' .. code)
@@ -494,7 +496,7 @@ local function yomi_check(task, content, digest, rule)
               end
             end
           else
-            rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
+            rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s, hash: %s', rule.log_prefix, code, body, headers, hash)
 
             if should_retransmit(code) then
               yomi_submission_info(task, submission_id)
@@ -509,13 +511,13 @@ local function yomi_check(task, content, digest, rule)
 
     local function hash_http_callback(http_err, code, body, headers)
       if http_err then
-        rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s', rule.log_prefix, http_err, body, headers)
+        rspamd_logger.errx(task, '%s: HTTP error: %s, body: %s, headers: %s, hash: %s', rule.log_prefix, http_err, body, headers, hash)
         
         if should_retransmit(code) then
           yomi_check_uncached()
         end
       else
-        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (attachment: %s, MIME type: %s, hash: %s, size: %s)', rule.log_prefix, code, file_name, detected_type, hash, file_size), task)
+        log_message(rule.log_http_return_code, string.format('%s: hash returned %s (attachment: %s, MIME type: %s, hash: %s, size: %s, body: %s)', rule.log_prefix, code, file_name, detected_type, hash, file_size, body), task)
 
         if code == 404 then
           rspamd_logger.debugm(N, task, '%s: hash %s not found', rule.log_prefix, hash)
@@ -572,7 +574,7 @@ local function yomi_check(task, content, digest, rule)
             end
           end
         else
-          rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s', rule.log_prefix, code, body, headers)
+          rspamd_logger.errx(task, '%s: invalid HTTP code: %s, body: %s, headers: %s, hash: %s', rule.log_prefix, code, body, headers, hash)
           
           if should_retransmit(code) then
             yomi_check_uncached()
